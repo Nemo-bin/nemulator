@@ -1,3 +1,4 @@
+#[derive(Copy, Clone)]
 pub enum Reg {
     A,
     F,
@@ -9,11 +10,19 @@ pub enum Reg {
     L,
 }
 
+#[derive(Copy, Clone)]
 pub enum RegW {
     AF,
     BC,
     DE,
     HL,
+}
+
+pub enum Flag {
+    Z,
+    N,
+    C,
+    H,
 }
 
 #[derive(Copy, Clone)]
@@ -57,32 +66,58 @@ impl Registers {
 
     pub fn get_regW(&self, src: RegW) -> u16 {
         match src {
-            RegW::AF => { (self.A as u16) << 8 | self.F as u16 }
-            RegW::BC => { (self.B as u16) << 8 | self.C as u16 }
-            RegW::DE => { (self.D as u16) << 8 | self.E as u16 }
-            RegW::HL => { (self.H as u16) << 8 | self.L as u16 }
+            RegW::AF => { (self.A as u16) << 8 | self.F as u16 },
+            RegW::BC => { (self.B as u16) << 8 | self.C as u16 },
+            RegW::DE => { (self.D as u16) << 8 | self.E as u16 },
+            RegW::HL => { (self.H as u16) << 8 | self.L as u16 },
         }
     }
 
-    pub fn set_reg(&mut self, dst: u8, src: Reg) {
-        match src {
-            Reg::A => { self.A = dst },
-            Reg::F => { self.F = dst },
-            Reg::B => { self.B = dst },
-            Reg::C => { self.C = dst },
-            Reg::D => { self.D = dst },
-            Reg::E => { self.E = dst },   
-            Reg::H => { self.H = dst },
-            Reg::L => { self.L = dst },       
+    pub fn set_reg(&mut self, dst: Reg, src: u8) {
+        match dst {
+            Reg::A => { self.A = src },
+            Reg::F => { self.F = src },
+            Reg::B => { self.B = src },
+            Reg::C => { self.C = src },
+            Reg::D => { self.D = src },
+            Reg::E => { self.E = src },   
+            Reg::H => { self.H = src },
+            Reg::L => { self.L = src },       
         };
     }
 
-    pub fn set_regW(&mut self, dst: u16, src: RegW) {
-        match src {
-            RegW::AF => { self.A = (dst >> 8) as u8; self.F = (dst << 8) as u8; },
-            RegW::BC => { self.B = (dst >> 8) as u8; self.C = (dst << 8) as u8; },
-            RegW::DE => { self.D = (dst >> 8) as u8; self.E = (dst << 8) as u8; },
-            RegW::HL => { self.H = (dst >> 8) as u8; self.L = (dst << 8) as u8; },
+    pub fn set_regW(&mut self, dst: RegW, src: u16) {
+        match dst {
+            RegW::AF => { self.A = (src >> 8) as u8; self.F = (src << 8) as u8; },
+            RegW::BC => { self.B = (src >> 8) as u8; self.C = (src << 8) as u8; },
+            RegW::DE => { self.D = (src >> 8) as u8; self.E = (src << 8) as u8; },
+            RegW::HL => { self.H = (src >> 8) as u8; self.L = (src << 8) as u8; },
         };
+    }
+
+    pub fn get_flag(&self, f: Flag) -> bool {
+        let src = match f {
+            Flag::Z => 0b10000000,
+            Flag::N => 0b01000000,
+            Flag::C => 0b00100000,
+            Flag::H => 0b00010000,
+        };
+
+        if self.F & src != 0 {
+            true
+        } else { false }
+    }
+
+    pub fn set_flag(&mut self, f: Flag, set: bool) {
+        let src = match f {
+            Flag::Z => 0b10000000,
+            Flag::N => 0b01000000,
+            Flag::C => 0b00100000,
+            Flag::H => 0b00010000,
+        };
+
+        if set {
+            self.F |= src;
+        } else { self.F &= !src; }
     }
 }
