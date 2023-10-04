@@ -1,91 +1,88 @@
-#[derive(Copy, Clone)]
-pub struct Registers{
-    pub  a:u8,
-    pub f:u8,
-    pub b:u8,
-    pub c:u8,
-    pub d:u8,
-    pub e:u8,
-    pub h:u8,
-    pub l:u8,
-    pub pc:u16,
-    pub sp:u16,
+pub enum Reg {
+    A,
+    F,
+    B,
+    C,
+    D,
+    E,
+    H,
+    L,
 }
 
-impl Registers{
-    pub fn new() -> Registers{
-        Registers{
-            a:0x01,
-            f:0xB0,
-            b:0x00,
-            c:0x13,
-            d:0x00,
-            e:0xD8,
-            h:0x01,
-            l:0x4D,
-            pc:0x0100,
-            sp:0xFFFE,
+pub enum RegW {
+    AF,
+    BC,
+    DE,
+    HL,
+}
+
+#[derive(Copy, Clone)]
+pub struct Registers {
+    pub A:u8,
+    pub F:u8,
+    pub B:u8,
+    pub C:u8,
+    pub D:u8,
+    pub E:u8,
+    pub H:u8,
+    pub L:u8,
+}
+
+impl Registers {
+    pub fn new() -> Self {
+        Registers {
+            A:0x01,
+            F:0xB0,
+            B:0x00,
+            C:0x13,
+            D:0x00,
+            E:0xD8,
+            H:0x01,
+            L:0x4D,
         }
     }
 
-    pub fn af(&self) -> u16{
-        ((self.a as u16) << 8) | ((self.f & 0xF0) as u16)
-    }
-    pub fn bc(&self) -> u16{
-        ((self.b as u16) << 8) | (self.c as  u16)
-    }
-    pub fn de(&self) -> u16{
-        ((self.d as u16) << 8) | (self.e as u16)
-    }
-    pub fn hl(&self) -> u16{
-        ((self.h as u16) << 8) | (self.l as u16)
-    }
-
-    pub fn set_af(&mut self, param:u16){
-        self.a = (param >> 8) as u8;
-        self.f = (param & 0x00F0) as u8;
-    }
-    pub fn set_bc(&mut self, param:u16){
-        self.b = (param >> 8) as u8;
-        self.c = (param & 0x00FF) as u8;
-    }
-    pub fn set_de(&mut self, param:u16){
-        self.d = (param >> 8) as u8;
-        self.e = (param & 0x00FF) as u8;
-    }
-    pub fn set_hl(&mut self, param:u16){
-        self.h = (param >> 8) as u8;
-        self.l = (param & 0x00FF) as u8;
+    pub fn get_reg(&self, src: Reg) -> u8 {
+        match src {
+            Reg::A => self.A,
+            Reg::F => self.F,
+            Reg::B => self.B,
+            Reg::C => self.C,
+            Reg::D => self.D,
+            Reg::E => self.E,   
+            Reg::H => self.H,
+            Reg::L => self.L,       
+        }
     }
 
-    // f = znhc0000
-    pub fn set_z_flag(&mut self, param:u16){
-        if param == 0 {self.f |= 0b10000000;}
-        else {self.f &= !0b10000000;}
-    }
-    pub fn set_n_flag(&mut self, param:u8){
-        if param == 0 {self.f &= !0b01000000;} 
-            else {self.f |= 0b01000000;}
-    }
-    pub fn set_h_flag(&mut self, param:u8){
-        if param == 0 {self.f &= !0b00100000;} 
-            else {self.f |= 0b00100000;}
-    }
-    pub fn set_c_flag(&mut self, param:u8){
-        if param == 0 {self.f &= !0b00010000;} 
-            else {self.f |= 0b00010000;}
+    pub fn get_regW(&self, src: RegW) -> u16 {
+        match src {
+            RegW::AF => { (self.A as u16) << 8 | self.F as u16 }
+            RegW::BC => { (self.B as u16) << 8 | self.C as u16 }
+            RegW::DE => { (self.D as u16) << 8 | self.E as u16 }
+            RegW::HL => { (self.H as u16) << 8 | self.L as u16 }
+        }
     }
 
-    pub fn get_z_flag(&self) -> u8{
-        (self.f & 0b10000000) >> 7
+    pub fn set_reg(&mut self, dst: u8, src: Reg) {
+        match src {
+            Reg::A => { self.A = dst },
+            Reg::F => { self.F = dst },
+            Reg::B => { self.B = dst },
+            Reg::C => { self.C = dst },
+            Reg::D => { self.D = dst },
+            Reg::E => { self.E = dst },   
+            Reg::H => { self.H = dst },
+            Reg::L => { self.L = dst },       
+        };
     }
-    pub fn get_n_flag(&self) -> u8{
-        (self.f & 0b01000000) >> 6
-    }
-    pub fn get_h_flag(&self) -> u8{
-        (self.f & 0b00100000) >> 5
-    }
-    pub fn get_c_flag(&self) -> u8{
-        (self.f & 0b00010000) >> 4
+
+    pub fn set_regW(&mut self, dst: u16, src: RegW) {
+        match src {
+            RegW::AF => { self.A = (dst >> 8) as u8; self.F = (dst << 8) as u8; },
+            RegW::BC => { self.B = (dst >> 8) as u8; self.C = (dst << 8) as u8; },
+            RegW::DE => { self.D = (dst >> 8) as u8; self.E = (dst << 8) as u8; },
+            RegW::HL => { self.H = (dst >> 8) as u8; self.L = (dst << 8) as u8; },
+        };
     }
 }

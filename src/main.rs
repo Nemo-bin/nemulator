@@ -17,10 +17,6 @@ fn main() {
 
     let mut cpu = CPU::new();
     cpu.memory.load_rom(filename);
-    cpu.mbc = cpu.memory.set_mbc();
-
-    // println!("{:x}",cpu.mbc);
-    // println!("{:x?}", cpu.memory.rom_bank_0);
 
     let running = true;
     while running {
