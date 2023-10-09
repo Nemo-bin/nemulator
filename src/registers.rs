@@ -36,6 +36,59 @@ pub struct Registers {
     pub H:u8,
     pub L:u8,
 }
+/*
+trait Eval {
+    fn eval_z(&self) -> bool;
+    fn eval_h(&self, pos: bool) -> bool;
+    fn eval_c(&self) -> bool;
+}
+
+impl Eval for u8 {
+    fn eval_z(&self) -> bool {
+        if *self == 0 {
+            true
+        } else { false }
+    }
+
+    fn eval_h(&self, add: bool, operand: u8) -> bool {
+        if add {
+            if (*self > 0x0F) && (*self - operand <= 0x0F) {
+                true
+            } else { false }
+        } else { 
+            if (*self < 0x0F) && (*self + operand >=0x0F) {
+                true
+            } else { false }
+        }
+    }
+
+    fn eval_c(&self, add: bool, operand: u8) -> bool {
+
+    }
+}
+
+impl Eval for u16 {
+    fn eval_z(&self) -> bool {
+        if *self == 0 {
+            true
+        } else { false }
+    }
+
+    fn eval_h(&self, add: bool, operand: u16) -> bool {
+        if add {
+            if (*self > 0x0FFF) && (*self - operand <= 0x0FFF) {
+                true
+            } else { false }
+        } else { 
+            if (*self < 0x0FFF) && (*self + operand >=0x0FFF) {
+                true
+            } else { false }
+        }
+    }
+
+    fn eval_c(&self) -> bool {}
+}
+*/
 
 impl Registers {
     pub fn new() -> Self {
@@ -88,10 +141,10 @@ impl Registers {
 
     pub fn set_regW(&mut self, dst: RegW, src: u16) {
         match dst {
-            RegW::AF => { self.A = (src >> 8) as u8; self.F = (src << 8) as u8; },
-            RegW::BC => { self.B = (src >> 8) as u8; self.C = (src << 8) as u8; },
-            RegW::DE => { self.D = (src >> 8) as u8; self.E = (src << 8) as u8; },
-            RegW::HL => { self.H = (src >> 8) as u8; self.L = (src << 8) as u8; },
+            RegW::AF => { self.A = (src >> 8) as u8; self.F = src as u8; },
+            RegW::BC => { self.B = (src >> 8) as u8; self.C = src as u8; },
+            RegW::DE => { self.D = (src >> 8) as u8; self.E = src as u8; },
+            RegW::HL => { self.H = (src >> 8) as u8; self.L = src as u8; },
         };
     }
 
@@ -112,12 +165,15 @@ impl Registers {
         let src = match f {
             Flag::Z => 0b10000000,
             Flag::N => 0b01000000,
-            Flag::C => 0b00100000,
-            Flag::H => 0b00010000,
+            Flag::H => 0b00100000,
+            Flag::C => 0b00010000,
         };
 
         if set {
             self.F |= src;
         } else { self.F &= !src; }
     }
+
+    // Eval flags
+    // pub fn eval_flags<T: Eval>(&mut self, val: T) {}
 }
