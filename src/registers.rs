@@ -36,59 +36,64 @@ pub struct Registers {
     pub H:u8,
     pub L:u8,
 }
-/*
+
+trait SupportedDataType {}
+impl SupportedDataType for u8 {}
+impl SupportedDataType for u16 {}
+
 trait Eval {
+    type GenericInteger: SupportedDataType;
     fn eval_z(&self) -> bool;
-    fn eval_h(&self, pos: bool) -> bool;
-    fn eval_c(&self) -> bool;
+    fn eval_c(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
+    fn eval_h(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
 }
 
 impl Eval for u8 {
+    type GenericInteger = u8;
+
     fn eval_z(&self) -> bool {
         if *self == 0 {
             true
         } else { false }
     }
 
-    fn eval_h(&self, add: bool, operand: u8) -> bool {
-        if add {
-            if (*self > 0x0F) && (*self - operand <= 0x0F) {
-                true
-            } else { false }
-        } else { 
-            if (*self < 0x0F) && (*self + operand >=0x0F) {
-                true
-            } else { false }
-        }
+    fn eval_c(&self, a: u8, b: u8) -> bool {
+        if (a & 0xeF == 0x80) && (b & 0xeF == 0x80) {
+            true
+        } else { false }
     }
 
-    fn eval_c(&self, add: bool, operand: u8) -> bool {
-
+    fn eval_h(&self, a: u8, b: u8) -> bool {
+        let sum = (a & 0xf) + (b & 0xf);
+        if (sum & 0x10 == 0x10) {
+            true
+        } else { false }
     }
+
 }
 
 impl Eval for u16 {
+    type GenericInteger = u16;
+
     fn eval_z(&self) -> bool {
         if *self == 0 {
             true
         } else { false }
     }
 
-    fn eval_h(&self, add: bool, operand: u16) -> bool {
-        if add {
-            if (*self > 0x0FFF) && (*self - operand <= 0x0FFF) {
-                true
-            } else { false }
-        } else { 
-            if (*self < 0x0FFF) && (*self + operand >=0x0FFF) {
-                true
-            } else { false }
-        }
+    fn eval_c(&self, a: u16, b: u16) -> bool {
+        if (a & 0xeFFF == 0x8000) && (b & 0xe7FFF == 0x8000) {
+            true
+        } else { false }
     }
 
-    fn eval_c(&self) -> bool {}
+    fn eval_h(&self, a: u16, b: u16) -> bool {
+        let sum = (a & 0xfff) + (b & 0xfff);
+        if (sum & 0x1000 == 0x1000) {
+            true
+        } else { false }
+    }
 }
-*/
 
 impl Registers {
     pub fn new() -> Self {
@@ -173,7 +178,4 @@ impl Registers {
             self.F |= src;
         } else { self.F &= !src; }
     }
-
-    // Eval flags
-    // pub fn eval_flags<T: Eval>(&mut self, val: T) {}
 }
