@@ -25,7 +25,7 @@ pub enum Flag {
     H,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Registers {
     pub A:u8,
     pub F:u8,
@@ -35,64 +35,6 @@ pub struct Registers {
     pub E:u8,
     pub H:u8,
     pub L:u8,
-}
-
-trait SupportedDataType {}
-impl SupportedDataType for u8 {}
-impl SupportedDataType for u16 {}
-
-trait Eval {
-    type GenericInteger: SupportedDataType;
-    fn eval_z(&self) -> bool;
-    fn eval_c(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
-    fn eval_h(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
-}
-
-impl Eval for u8 {
-    type GenericInteger = u8;
-
-    fn eval_z(&self) -> bool {
-        if *self == 0 {
-            true
-        } else { false }
-    }
-
-    fn eval_c(&self, a: u8, b: u8) -> bool {
-        if (a & 0xeF == 0x80) && (b & 0xeF == 0x80) {
-            true
-        } else { false }
-    }
-
-    fn eval_h(&self, a: u8, b: u8) -> bool {
-        let sum = (a & 0xf) + (b & 0xf);
-        if (sum & 0x10 == 0x10) {
-            true
-        } else { false }
-    }
-
-}
-
-impl Eval for u16 {
-    type GenericInteger = u16;
-
-    fn eval_z(&self) -> bool {
-        if *self == 0 {
-            true
-        } else { false }
-    }
-
-    fn eval_c(&self, a: u16, b: u16) -> bool {
-        if (a & 0xeFFF == 0x8000) && (b & 0xe7FFF == 0x8000) {
-            true
-        } else { false }
-    }
-
-    fn eval_h(&self, a: u16, b: u16) -> bool {
-        let sum = (a & 0xfff) + (b & 0xfff);
-        if (sum & 0x1000 == 0x1000) {
-            true
-        } else { false }
-    }
 }
 
 impl Registers {

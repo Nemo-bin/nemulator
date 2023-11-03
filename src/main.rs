@@ -20,6 +20,11 @@ fn main() {
 
     let running = true;
     while running {
+        if cpu.memory.read(0xff02) == 0x81 {
+            println!("{:x}", cpu.memory.read(0xff01));
+        }
+        println!("{:x}:{:x} - {:x?}", cpu.pc, cpu.sp, cpu.registers);
+
         thread::sleep(Duration::from_millis(0));
         let opcode = cpu.fetch();
         cpu.execute(opcode);
