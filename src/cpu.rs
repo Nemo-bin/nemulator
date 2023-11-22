@@ -9,54 +9,59 @@ impl SupportedDataType for i16 {}
 trait Eval {
     type GenericInteger: SupportedDataType;
     fn eval_z(&self) -> bool;
-    fn eval_c(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
-    fn eval_h(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
+    fn eval_c_add(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
+    fn eval_h_add(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
+    fn eval_c_sub(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
+    fn eval_h_sub(&self, a: Self::GenericInteger, b: Self::GenericInteger) -> bool;
 }
 
 impl Eval for u8 {
     type GenericInteger = u8;
 
     fn eval_z(&self) -> bool {
-        if *self == 0 {
-            true
-        } else { false }
+        *self == 0
     }
 
-    fn eval_c(&self, a: u8, b: u8) -> bool {
-        if (a & 0xeF == 0x80) && (b & 0xeF == 0x80) {
-            true
-        } else { false }
+    fn eval_c_add(&self, a: u8, b: u8) -> bool {
+        (a.wrapping_add(b)) < a || (a.wrapping_add(b)) < b
     }
 
-    fn eval_h(&self, a: u8, b: u8) -> bool {
+    fn eval_h_add(&self, a: u8, b: u8) -> bool {
         let sum = (a & 0xf) + (b & 0xf);
-        if (sum & 0x10 == 0x10) {
-            true
-        } else { false }
+        (sum & 0x10) == 0x10
     }
 
+    fn eval_c_sub(&self, a: u8, b: u8) -> bool {
+        (a as i16 - b as i16) < 0
+    }
+
+    fn eval_h_sub(&self, a: u8, b: u8) -> bool {
+        (a & 0x0F) < (b & 0x0F)
+    }
 }
 
 impl Eval for u16 {
     type GenericInteger = u16;
 
     fn eval_z(&self) -> bool {
-        if *self == 0 {
-            true
-        } else { false }
+        *self == 0
     }
 
-    fn eval_c(&self, a: u16, b: u16) -> bool {
-        if (a & 0xeFFF == 0x8000) && (b & 0xeFFF == 0x8000) {
-            true
-        } else { false }
+    fn eval_c_add(&self, a: u16, b: u16) -> bool {
+        (a.wrapping_add(b)) < a || (a.wrapping_add(b)) < b
     }
 
-    fn eval_h(&self, a: u16, b: u16) -> bool {
+    fn eval_h_add(&self, a: u16, b: u16) -> bool {
         let sum = (a & 0xfff) + (b & 0xfff);
-        if (sum & 0x1000 == 0x1000) {
-            true
-        } else { false }
+        (sum & 0x1000) == 0x1000
+    }
+
+    fn eval_c_sub(&self, a: u16, b: u16) -> bool {
+        (a as i16 - b as i16) < 0
+    }
+
+    fn eval_h_sub(&self, a: u16, b: u16) -> bool {
+        (a & 0xFFF) < (b & 0xFFF)
     }
 }
 
@@ -64,28 +69,29 @@ impl Eval for i16 {
     type GenericInteger = i16;
 
     fn eval_z(&self) -> bool {
-        if *self == 0 {
-            true
-        } else { false }
+        *self == 0
     }
 
-    fn eval_c(&self, a: i16, b: i16) -> bool {
-        if (a as u16 & 0xeFFF == 0x8000) && (b as u16 & 0xeFFF == 0x8000) {
-            true
-        } else { false }
+    fn eval_c_add(&self, a: i16, b: i16) -> bool {
+        (a.wrapping_add(b)) < a || (a.wrapping_add(b)) < b
     }
 
-    fn eval_h(&self, a: i16, b: i16) -> bool {
+    fn eval_h_add(&self, a: i16, b: i16) -> bool {
         let sum = (a & 0xfff) + (b & 0xfff);
-        if (sum & 0x1000 == 0x1000) {
-            true
-        } else { false }
+        (sum & 0x1000) == 0x1000
+    }
+
+    fn eval_c_sub(&self, a: i16, b: i16) -> bool {
+        (a as i16 - b as i16) < 0
+    }
+
+    fn eval_h_sub(&self, a: i16, b: i16) -> bool {
+        (a & 0x0F) < (b & 0x0F)
     }
 }
 
 const KIB:usize = 1024;
 
-#[derive(Copy, Clone)]
 pub struct CPU {
     pub halted: bool,
     pub ime: bool,
@@ -105,7 +111,7 @@ impl CPU{
             registers: Registers::new(),
             memory: Memory::new(),
             pc: 0x100,
-            sp: 0x0,
+            sp: 0xFFFE,
         }
     }
 
@@ -122,14 +128,14 @@ impl CPU{
         (upper_byte << 8) | lower_byte 
     }
 
-    pub fn stack_push(mut self, num:u16){
+    pub fn stack_push(&mut self, num:u16){
         self.sp = self.sp.wrapping_sub(1);
         self.memory.write(self.sp.into(), (num >> 8) as u8);
         self.sp = self.sp.wrapping_sub(1);
         self.memory.write(self.sp.into(), (num & 0xFF) as u8);
     }
 
-    pub fn stack_pop(mut self) -> u16{
+    pub fn stack_pop(&mut self) -> u16{
         let lower = self.memory.read(self.sp.into()) as u16;
         self.sp = self.sp.wrapping_add(1);
         let upper = self.memory.read(self.sp.into()) as u16;
@@ -410,7 +416,7 @@ impl CPU{
             if r8 == 6 {
                 let src = RegW::HL;
                 if upper_bits == 0 {
-                    match opcode & 0b00111000 {
+                    match (opcode & 0b00111000) >> 3 {
                         0 => self.rlc_hl(),
                         1 => self.rrc_hl(),
                         2 => self.rl_hl(),
@@ -442,7 +448,7 @@ impl CPU{
                     _ => unreachable!()
                 };
                 if upper_bits == 0 {
-                    match opcode & 0b00111000 {
+                    match (opcode & 0b00111000) >> 3 {
                         0 => self.rlc(src),
                         1 => self.rrc(src),
                         2 => self.rl(src),
@@ -485,8 +491,8 @@ impl CPU{
         self.registers.set_regW(RegW::HL, self.sp);
         self.registers.set_flag(Flag::Z, false);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(self.sp as i16, src));
-        self.registers.set_flag(Flag::C, src.eval_c(self.sp as i16, src));
+        self.registers.set_flag(Flag::H, src.eval_h_add(self.sp as i16, src));
+        self.registers.set_flag(Flag::C, src.eval_c_add(self.sp as i16, src));
     }
 
     // Load a register with the operand
@@ -574,11 +580,12 @@ impl CPU{
     // INC / DEC
     // Increment a register
     pub fn inc_reg(&mut self, dst: Reg) {
-        let src = self.registers.get_reg(dst).wrapping_add(1);
-        self.registers.set_reg(dst, src);
-        self.registers.set_flag(Flag::Z, src.eval_z());
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_add(1);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum.eval_z());
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, 1));
+        self.registers.set_flag(Flag::H, sum.eval_h_add(src, 1));
     }
 
     pub fn inc_regW(&mut self, dst: RegW) {
@@ -588,11 +595,12 @@ impl CPU{
 
     // Decrement a register
     pub fn dec_reg(&mut self, dst: Reg) {
-        let src = self.registers.get_reg(dst).wrapping_sub(1);
-        self.registers.set_reg(dst, src);
-        self.registers.set_flag(Flag::Z, src.eval_z());
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_sub(1);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum.eval_z());
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, 1)); // might not work for sub
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, 1)); // might not work for sub
     }
 
     pub fn dec_regW(&mut self, dst: RegW) {
@@ -607,7 +615,7 @@ impl CPU{
         self.memory.write(addr, src.wrapping_add(1));
         self.registers.set_flag(Flag::Z, src.eval_z());
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, 1));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, 1));
     }
 
     pub fn dec_addr(&mut self, dst: RegW) {
@@ -616,7 +624,7 @@ impl CPU{
         self.memory.write(addr, src.wrapping_sub(1));
         self.registers.set_flag(Flag::Z, src.eval_z());
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, 1)); // might not  work for sub
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, 1)); // might not  work for sub
     }
 
     // ADD / SUB / ADC / SBC
@@ -628,8 +636,8 @@ impl CPU{
         self.registers.set_reg(dst, sum); 
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add));
     }
 
     pub fn regW_add_regW(&mut self, dst: RegW, src: RegW) {
@@ -638,8 +646,8 @@ impl CPU{
         let sum = add.wrapping_add(src);
         self.registers.set_regW(dst, sum); 
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add));
     }
 
     pub fn regW_add_sp(&mut self, dst: RegW) {
@@ -656,8 +664,8 @@ impl CPU{
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add));
     }
 
     // Add operand to register
@@ -668,8 +676,8 @@ impl CPU{
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add));
     }
 
     pub fn sp_add_operand(&mut self) {
@@ -678,8 +686,8 @@ impl CPU{
         self.sp.wrapping_add_signed(self.fetch() as i16);
         self.registers.set_flag(Flag::Z, false);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add.into()));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add.into()));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add.into()));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add.into()));
     }
     
     // Adc two registers
@@ -691,8 +699,8 @@ impl CPU{
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add));
     }
 
     // Adc value at regW address to register
@@ -705,8 +713,8 @@ impl CPU{
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add));
     }
 
     // Adc operand to register
@@ -718,80 +726,85 @@ impl CPU{
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
+        self.registers.set_flag(Flag::C, src.eval_c_add(src, add));
     }
 
     // Sub two registers
     pub fn reg_sub_reg(&mut self, dst: Reg, src: Reg) {
-        let add = self.registers.get_reg(src);
+        let sub = self.registers.get_reg(src);
         let src = self.registers.get_reg(dst);
-        let sum = self.registers.get_reg(dst).wrapping_sub(src);
+        let sum = src.wrapping_sub(sub);
         self.registers.set_reg(dst, sum); 
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src.eval_c_sub(src, sub));
     }
 
     // Sub value at regW address from register 
     pub fn reg_sub_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let add = self.memory.read(addr);
+        let sub = self.memory.read(addr);
         let src = self.registers.get_reg(dst);
-        let sum = src.wrapping_sub(src);
+        let sum = src.wrapping_sub(sub);
         self.registers.set_reg(dst, sum); 
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src.eval_c_sub(src, sub));
     }
 
     // Sub operand from register
     pub fn reg_sub_operand(&mut self, dst: Reg) {
-        let src = self.fetch();
-        let sum = self.registers.get_reg(dst).wrapping_sub(src);
+        let sub = self.fetch();
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_sub(sub);
         self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, true);
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src.eval_c_sub(src, sub));
     }
 
     // Sbc two registers
     pub fn reg_sbc_reg(&mut self, dst: Reg, src: Reg) {
         let cy = self.registers.get_flag(Flag::C) as u8;
-        let src = self.registers.get_reg(src).wrapping_add(cy);
-        let add = self.registers.get_reg(dst);
-        let sum = add.wrapping_sub(src);
+        let sub = self.registers.get_reg(src).wrapping_add(cy);
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_sub(sub);
         self.registers.set_reg(dst, sum); 
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src.eval_c_sub(src, sub));
     }
 
     // Sbc value at regW address from register
     pub fn reg_sbc_regWaddr(&mut self, dst: Reg, src: RegW) {
         let cy = self.registers.get_flag(Flag::C) as u8;
         let addr = self.registers.get_regW(src);
-        let src = self.memory.read(addr).wrapping_add(cy);
-        let add = self.registers.get_reg(dst);
-        let sum = add.wrapping_sub(src);
+        let sub = self.memory.read(addr).wrapping_add(cy);
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_sub(sub);
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src.eval_c_sub(src, sub));
     }
 
     // Sbc operand from register
     pub fn reg_sbc_operand(&mut self, dst: Reg) {
         let cy = self.registers.get_flag(Flag::C) as u8;
-        let src = self.fetch().wrapping_add(cy);
-        let add = self.registers.get_reg(dst);
-        let sum = self.registers.get_reg(dst).wrapping_sub(src);
+        let sub = self.fetch().wrapping_add(cy);
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_sub(src);
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, src.eval_c(src, add));
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src.eval_c_sub(src, sub));
     }
 
     // AND / OR / XOR / CP
@@ -899,36 +912,36 @@ impl CPU{
 
     // CP two registers
     pub fn reg_cp_reg(&mut self, dst: Reg, src: Reg) {
-        let src = self.registers.get_reg(src);
-        let add = self.registers.get_reg(dst);
-        let sum = add.wrapping_sub(src);
+        let sub = self.registers.get_reg(src);
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_sub(sub);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, add < src);
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src < sub);
     }
 
     // CP value at regW address with register 
     pub fn reg_cp_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let src = self.memory.read(addr);
-        let add = self.registers.get_reg(dst);
-        let sum = add.wrapping_sub(src);
+        let sub = self.memory.read(addr);
+        let src = self.registers.get_reg(dst);
+        let sum = sub.wrapping_sub(src);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, add < src);
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src < sub);
     }
 
     // CP operand with register
     pub fn reg_cp_operand(&mut self, dst: Reg) {
-        let src = self.fetch();
-        let add = self.registers.get_reg(dst);
-        let sum = add.wrapping_sub(src);
+        let sub = self.fetch();
+        let src = self.registers.get_reg(dst);
+        let sum = src.wrapping_sub(sub);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, true);
-        self.registers.set_flag(Flag::H, src.eval_h(src, add));
-        self.registers.set_flag(Flag::C, add < src);
+        self.registers.set_flag(Flag::H, src.eval_h_sub(src, sub));
+        self.registers.set_flag(Flag::C, src < sub);
     }
 
     // SP POP / PUSH to register
@@ -947,8 +960,12 @@ impl CPU{
     pub fn rlc(&mut self, dst: Reg) {
         let mut src = self.registers.get_reg(dst);
         let cy = src >> 7;
-        src <<= 1;
-        self.registers.set_reg(dst, (src | cy));
+        let sum = ((src << 1) | cy);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // RL
@@ -956,8 +973,12 @@ impl CPU{
         let mut src = self.registers.get_reg(dst);
         let cy = src >> 7;
         let cf = self.registers.get_flag(Flag::C) as u8;
-        src <<= 1;
-        self.registers.set_reg(dst, (src | cf));
+        let sum = ((src << 1) | cf);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // RLCA
@@ -990,8 +1011,12 @@ impl CPU{
         let addr = self.registers.get_regW(RegW::HL);
         let mut src = self.memory.read(addr);
         let cy = src >> 7;
-        src <<= 1;
-        self.memory.write(addr, src);
+        let sum = ((src << 1) | cy);
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // RL (HL)
@@ -1000,25 +1025,41 @@ impl CPU{
         let mut src = self.memory.read(addr);
         let cy = src >> 7;
         let cf = self.registers.get_flag(Flag::C) as u8;
-        src <<= 1;
-        self.memory.write(addr, (src | cf));
+        let sum = ((src << 1) | cf);
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // RRC
     pub fn rrc(&mut self, dst: Reg) {
         let mut src = self.registers.get_reg(dst);
         let cy = src << 7;
-        src >>= 1;
-        self.registers.set_reg(dst, (src | cy));
+        let sum = ((src >> 1) | cy);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // RR
     pub fn rr(&mut self, dst: Reg) {
         let mut src = self.registers.get_reg(dst);
+        println!("{:x}", src);
         let cy = src << 7;
+        println!("{:x}", cy);
         let cf = self.registers.get_flag(Flag::C) as u8;
-        src >>= 1;
-        self.registers.set_reg(dst, (src | cf));
+        println!("{:x}", cf);
+        let sum = ((src >> 1) | (cf << 7));
+        println!("{:x}", sum);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // RRCA
@@ -1051,8 +1092,12 @@ impl CPU{
         let addr = self.registers.get_regW(RegW::HL);
         let mut src = self.memory.read(addr);
         let cy = src << 7;
-        src >>= 1;
-        self.memory.write(addr, src);
+        let sum = ((src >> 1) | cy);
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // RR (HL)
@@ -1061,8 +1106,12 @@ impl CPU{
         let mut src = self.memory.read(addr);
         let cy = src << 7;
         let cf = self.registers.get_flag(Flag::C) as u8;
-        src >>= 1;
-        self.memory.write(addr, (src | cf));
+        let sum = ((src >> 1) | (cf << 7));
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // Shifts
@@ -1070,66 +1119,113 @@ impl CPU{
     pub fn sla(&mut self, dst: Reg) {
         let src = self.registers.get_reg(dst);
         let cy = src >> 7;
-        self.registers.set_reg(dst, src << 1);
+        let sum = src << 1;
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     pub fn sla_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
         let src = self.memory.read(addr);
         let cy = src >> 7;
-        self.memory.write(addr, src << 1);
+        let sum = src << 1;
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // SRA
     pub fn sra(&mut self, dst: Reg) {
         let src = self.registers.get_reg(dst);
         let msb = src >> 7;
-        let result = (src >> 1 | msb << 7);
+        let cy = src & 0x1;
+        let sum = (src >> 1 | msb << 7);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     pub fn sra_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
         let src = self.memory.read(addr);
         let msb = src >> 7;
-        let result = (src >> 1 | msb << 7);
-        self.memory.write(addr, result);
+        let cy = src & 0x1;
+        let sum = (src >> 1 | msb << 7);
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     // SRL
     pub fn srl(&mut self, dst: Reg) {
         let src = self.registers.get_reg(dst);
-        let cy = src << 7;
-        self.registers.set_reg(dst, src >> 1);
+        let cy = src & 0x1;
+        let sum = src >> 1;
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);
     }
 
     pub fn srl_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
         let src = self.memory.read(addr);
         let cy = src << 7;
-        self.memory.write(addr, src >> 1);     
+        let sum = src >> 1;
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, cy != 0);     
     }
 
     // Swap
     pub fn swap(&mut self, dst: Reg) {
         let src = self.registers.get_reg(dst);
-        self.registers.set_reg(dst, src >> 4 | src << 4)
+        let sum = (src >> 4) | (src << 4);
+        self.registers.set_reg(dst, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, false);
     }
 
     pub fn swap_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
         let src = self.memory.read(addr);
-        self.memory.write(addr, src >> 4 | src << 4);
+        let sum = (src >> 4) | (src << 4);
+        self.memory.write(addr, sum);
+        self.registers.set_flag(Flag::Z, sum == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, false);
+        self.registers.set_flag(Flag::C, false);
     }
 
     pub fn bit(&mut self, pos: u8, dst: Reg) {
         let src = self.registers.get_reg(dst);
         let bit = (src >> pos) & 0b11111110;
+        self.registers.set_flag(Flag::Z, bit == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, true);
     }
 
     pub fn bit_hl(&mut self, pos: u8) {
         let addr = self.registers.get_regW(RegW::HL);
         let src = self.memory.read(addr);
         let bit = (src >> pos) & 0b11111110;
+        self.registers.set_flag(Flag::Z, bit == 0);
+        self.registers.set_flag(Flag::N, false);
+        self.registers.set_flag(Flag::H, true);
     }
 
     pub fn res(&mut self, pos: u8, dst: Reg) {
@@ -1205,23 +1301,23 @@ impl CPU{
     // Relative Jumps
     // jr
     pub fn jr(&mut self) {
-        let r_pos = self.fetch() as i16;
-        self.pc = self.pc.wrapping_add_signed(r_pos);
+        let r_pos = self.fetch() as i8;
+        self.pc = self.pc.wrapping_add_signed(r_pos.into());
     }
 
     // If not flag
     pub fn jr_nf(&mut self, f: Flag) {
-        let r_pos = self.fetch() as i16;
+        let r_pos = self.fetch() as i8;
         if !self.registers.get_flag(f) {
-            self.pc = self.pc.wrapping_add_signed(r_pos);
+            self.pc = self.pc.wrapping_add_signed(r_pos.into());
         }
     }
 
     // If flag
     pub fn jr_f(&mut self, f: Flag) {
-        let r_pos = self.fetch() as i16;
+        let r_pos = self.fetch() as i8;
         if self.registers.get_flag(f) {
-            self.pc = self.pc.wrapping_add_signed(r_pos);
+            self.pc = self.pc.wrapping_add_signed(r_pos.into());
         }
     }
 
