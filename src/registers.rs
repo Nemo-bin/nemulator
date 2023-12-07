@@ -88,7 +88,7 @@ impl Registers {
 
     pub fn set_regW(&mut self, dst: RegW, src: u16) {
         match dst {
-            RegW::AF => { self.A = (src >> 8) as u8; self.F = src as u8; },
+            RegW::AF => { self.A = (src >> 8) as u8; self.F = (src as u8 & 0xF0); },
             RegW::BC => { self.B = (src >> 8) as u8; self.C = src as u8; },
             RegW::DE => { self.D = (src >> 8) as u8; self.E = src as u8; },
             RegW::HL => { self.H = (src >> 8) as u8; self.L = src as u8; },
@@ -99,8 +99,8 @@ impl Registers {
         let src = match f {
             Flag::Z => 0b10000000,
             Flag::N => 0b01000000,
-            Flag::C => 0b00100000,
-            Flag::H => 0b00010000,
+            Flag::H => 0b00100000,
+            Flag::C => 0b00010000,
         };
 
         if self.F & src != 0 {
