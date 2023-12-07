@@ -116,6 +116,6 @@ fn main() {
         let opcode = cpu.fetch();
         cpu.execute(opcode);
         ppu.draw_frame(&cpu);
-        print!("{:?}", ppu.renderer.displaybuffer);
+        // print!("{:?}", ppu.renderer.displaybuffer);
     }
 }

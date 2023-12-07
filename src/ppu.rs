@@ -120,7 +120,7 @@ pub struct PPU {
 
     pub viewport: [[u8; 160]; 144], // Index coord (x, y) with viewport[y][x]
     pub oam_buffer: Vec<Sprite>,
-    pub tilemap_row: [u16; 32], // stores pointer (index) of background or window pixel to be drawn. 
+    pub tilemap_row: [u8; 32], // stores pointer (index) of background or window pixel to be drawn. 
     pub pixelmap: [[u8; 256]; 256],
     pub renderer: SDLRenderer,
 }
@@ -167,24 +167,26 @@ impl PPU {
         }
     }
 
-    pub fn tilemap_scan(&mut self, vram: [u8; 8*KIB], wx: u8, wy: u8) { // need to write a check for which table to be used, bits in lcdc define it.
-        let window_map_pointer = if (self.lcdc & 128) == 0 { 0x9800 - 0x8000 } else { 0x9C00 - 0x8000 };
-        let bg_map_pointer = if (self.lcdc & 8) == 0 { 0x9800 - 0x8000 } else { 0x9C00 - 0x8000 };
+    pub fn tilemap_scan(&mut self, cpu: &CPU, wx: u8, wy: u8) {
+        let window_map_pointer = if (self.lcdc & 128) == 0 { 0x9800 } else { 0x9C00 }; // checks which tilemap to use
+        let bg_map_pointer = if (self.lcdc & 8) == 0 { 0x9800 } else { 0x9C00 };
 
         for byte in 0..32 {
-            let mut x = byte as usize;
-            if self.ly >= wy && self.lcdc & 64 != 0 { // check if its equal or below top right most pixel of window, check if window enabled
+            let mut x = byte as u16;
+            if self.ly >= wy && self.lcdc & 32 != 0 { // check if its equal or below top right most pixel of window, check if window enabled
                 if byte <= wx { // check if its equal or below to left most pixel of window
-                    self.tilemap_row[x] = vram[window_map_pointer + x + (32 * (self.ly % 8) as usize)] as u16; // if it is, get index value for window
-                } else { self.tilemap_row[x] = vram[bg_map_pointer + x + (32 * (self.ly % 8) as usize)] as u16; } // if its not, get index for bg
-            } else { self.tilemap_row[x] = vram[bg_map_pointer + x + (32 * (self.ly % 8) as usize)] as u16; } // ^^^
+                    self.tilemap_row[x as usize] = cpu.memory.read((window_map_pointer + x + 32 as u16 * (self.ly % 8) as u16) as u16); // if it is, get index value for window
+                } 
+                else { self.tilemap_row[x as usize] = cpu.memory.read((bg_map_pointer + x + 32 as u16 * (self.ly % 8) as u16) as u16); } // if its not, get index for bg
+            } 
+            else { self.tilemap_row[x as usize] = cpu.memory.read((bg_map_pointer + x + 32 as u16 * (self.ly % 8) as u16) as u16); } // ^^^
             x += 1
         }
     }
 
     pub fn mode_2(&mut self, cpu: &CPU) {
         self.sprite_scan(cpu.memory.oam); // create buffer of sprites
-        self.tilemap_scan(cpu.memory.vram, cpu.memory.read(0xFF4A), cpu.memory.read(0xFF4B).wrapping_sub(7)); // create buffer of win / bg indexes
+        self.tilemap_scan(cpu, cpu.memory.read(0xFF4A), cpu.memory.read(0xFF4B).wrapping_sub(7)); // create buffer of win / bg indexes
     }
 
     pub fn mode_3(&mut self, cpu: &CPU) {
@@ -192,8 +194,8 @@ impl PPU {
         self.ly = cpu.memory.read(0xff44);
 
         for tile in self.tilemap_row {
-            let bytes_index = if self.lcdc & 16 == 0 && tile < 128 { 0x9000 + tile * 16 }
-            else { 0x8000 + tile * 16 };
+            let bytes_index = if self.lcdc & 16 == 0 && tile < 128 { 0x9000 + tile as u16 * 16 }
+            else { 0x8000 + tile as u16 * 16 };
             let mut byte_a = cpu.memory.read(bytes_index); // lower byte of bgwin row
             let mut byte_b = cpu.memory.read(bytes_index + 1); // upper byte of bgwin row
             for pixel in 0..7 {
@@ -205,7 +207,7 @@ impl PPU {
         }
         self.x = 0;
 
-        for sprite in &self.oam_buffer {
+        for sprite in &self.oam_buffer { // need to add sprite prioritisation
             if sprite.x == self.x {
                 let bytes_index = sprite.index + (2*(self.ly - sprite.y) % 8); // get the pointer for sprite data on that row
                 let mut byte_a = cpu.memory.vram[bytes_index as usize]; // lower byte of sprite row
@@ -251,7 +253,7 @@ impl PPU {
                 pixel.r = colour;
                 pixel.g = colour;
                 pixel.b = colour;
-                pixel.a = 255;
+                pixel.a = 0;
             } else { // is sprite 
                 colour_id &= 0b00000011; 
                 let palette_value = (cpu.memory.read(0xff48 + ((colour_id & 0b01000000) >> 6) as u16) & (0b00000011 << (colour_id*2))) >> (colour_id*2);
@@ -265,7 +267,7 @@ impl PPU {
                 pixel.r = colour;
                 pixel.g = colour;
                 pixel.b = colour;
-                pixel.a = if colour == 0 { 0 } else { 255 };
+                pixel.a = if colour == 0 { 255 } else { 0 };
             }
 
             self.renderer.displaybuffer[i*4] = pixel.r;
