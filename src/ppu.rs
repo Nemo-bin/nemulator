@@ -187,7 +187,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
 
         let byte_address = tile_address + offset;
 
-        self.tile_data_low = memory.read(byte_address + 1);
+        self.tile_data_high = memory.read(byte_address + 1);
     }
 
     pub fn push_to_fifo() {
