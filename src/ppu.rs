@@ -240,6 +240,7 @@ impl PPU  {
             let scx = memory.read(0xff32);
             self.renderer.displaybuffer[(self.ly*160).wrapping_add(self.x) as usize] = self.bg_row[scx.wrapping_add(self.x) as usize];
             self.x += 1;
+            self.renderer.update();
         } else { self.mode = 0; self.x = 0; }
     }
 }
