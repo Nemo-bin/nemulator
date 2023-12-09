@@ -24,6 +24,7 @@ use sdl2::event::Event;
 use cpu::CPU;
 use registers::Reg;
 use ppu::PPU;
+use memory::Memory;
 
 const GB_WIDTH:u32 = 160;
 const GB_HEIGHT:u32 = 144;
@@ -43,8 +44,6 @@ fn main() {
 
     let mut cpu = CPU::new();
     cpu.memory.load_rom(filename);
-
-    let mut ppu = PPU::new(&cpu);
 
     /*
     fs::remove_file("logfiles/logfile.log").expect("removal failed");
@@ -106,7 +105,7 @@ fn main() {
 
         // println!("{}", log_line);
 
-        for event in ppu.renderer.event_pump.poll_iter() {
+        for event in cpu.ppu.renderer.event_pump.poll_iter() {
             match event {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { running = false; },
                 _ => {},
@@ -115,7 +114,9 @@ fn main() {
 
         let opcode = cpu.fetch();
         cpu.execute(opcode);
-        ppu.draw_frame(&cpu);
+        /* if cpu.memory.read(0xFF44) == 0 {
+            ppu.draw_frame(&cpu);
+        } */ 
         // print!("{:?}", ppu.renderer.displaybuffer);
     }
 }

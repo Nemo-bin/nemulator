@@ -1,10 +1,10 @@
+const KIB:usize = 1024;
+
+//////////////////////////////// USE ////////////////////////////////
+
 use crate::memory::Memory;
 use crate::registers::*;
 use crate::cpu::CPU;
-
-const KIB:usize = 1024;
-
-//////////////////////////////// SDL2 ////////////////////////////////
 
 use sdl2::{
     pixels::PixelFormatEnum,
@@ -48,7 +48,7 @@ impl SDLRenderer {
 
         let texture_creator = canvas.texture_creator();
         let t = texture_creator.create_texture_streaming(
-            PixelFormatEnum::ARGB8888,
+            PixelFormatEnum::RGB888,
             width,
             height,
         );
@@ -76,209 +76,170 @@ impl SDLRenderer {
 /////////////////////////////// SPRITE ///////////////////////////////
 
 pub struct Sprite {
-   pub y: u8,
-   pub x: u8,
-   pub index: u8,
-   pub attributes: u8, 
-}
+    pub y: u8,
+    pub x: u8,
+    pub index: u8,
+    pub attributes: u8, 
+ }
+ 
+ impl Sprite {
+     pub fn new(y: u8, x: u8, index: u8, attributes: u8) -> Self {
+         Sprite {
+             y: y,
+             x: x,
+             index: index,
+             attributes: attributes,
+         }
+     }
+ }
 
-impl Sprite {
-    pub fn new(y: u8, x: u8, index: u8, attributes: u8) -> Self {
-        Sprite {
-            y: y,
-            x: x,
-            index: index,
-            attributes: attributes,
-        }
-    }
-}
-
-//////////////////////////////// PPU ////////////////////////////////
-
-pub struct Pixel {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-
-impl Pixel {
-    pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Pixel {
-            r, g, b, a
-        }
-    }
-}
+/////////////////////////////// PPU ////////////////////////////////
 
 pub struct PPU {
     pub mode: u8,
-    pub lcdc: u8,
-    pub ly: u8, // indicates current Y
-    pub x: u8, // indicates current X
-    pub scy: u8,
-    pub scx: u8,
+    pub cycles: u16,
+    pub ly: u8,
+    x: u8,
+    pub oam_pointer: usize,
 
-    pub viewport: [[u8; 160]; 144], // Index coord (x, y) with viewport[y][x]
+    // Buffers
+    pub viewport: [[u8; 160]; 144], // Index coord (x, y) with viewport[y][x] - MAY BE DISREGARDED
     pub oam_buffer: Vec<Sprite>,
-    pub tilemap_row: [u8; 32], // stores pointer (index) of background or window pixel to be drawn. 
-    pub pixelmap: [[u8; 256]; 256],
+    pub bg_tile_row: [u8; 32], // stores pointer (index) of background tile to be drawn. - MAY BE DISREGARDED
+    pub bg_row: [u8; 256],
     pub renderer: SDLRenderer,
 }
 
-impl PPU {
-    pub fn new(cpu: &CPU) -> Self {
+impl PPU  {
+    pub fn new() -> Self {
         let r = SDLRenderer::new(160, 144);
 
         PPU {
             mode: 2,
-            lcdc: cpu.memory.read(0xff40),
-            ly: cpu.memory.read(0xff44),
+            cycles: 0,
+            ly: 0,
             x: 0,
-            scy: cpu.memory.read(0xff42),
-            scx: cpu.memory.read(0xff43),
+            oam_pointer: 0,
 
             viewport: [[0; 160]; 144],
             oam_buffer: Vec::new(),
-            tilemap_row: [0; 32],
-            pixelmap: [[0; 256]; 256],
+            bg_tile_row: [0; 32],
+            bg_row: [0; 256],
             renderer: r,
         }
     }
 
-    // mode 2 related functions
+    pub fn tick(&mut self, memory: &Memory) {
+        self.cycles = self.cycles.wrapping_add(4);
 
-    pub fn sprite_scan(&mut self, oam: [u8; 0xA0]) {
-        let mut pointer:usize = 0;
-
-        for byte in 0..0x28 { // length of oam / 4 to loop for the number of sprites.
-            let height = if (self.lcdc & 0x4) == 0 { 8 } else { 16 }; // check if 8x8 or 8x16
-
-            let y = oam[pointer];    
-            let x = oam[pointer + 1];
-            let index = oam[pointer + 2];    
-            let attributes = oam[pointer + 3];
-            let sprite = Sprite::new(y, x, index, attributes);
-
-            if ((y + height > self.ly + 16) && (y <= self.ly + 16) && (x > 0)) { // check if has pixels on current row
-                self.oam_buffer.push(sprite); // push sprite to oam buffer
-                if self.oam_buffer.len() == 10 { return } // check not reached 10 sprites yet (hardware limit)
+        if self.cycles % 456 == 0 { // inc ly
+            self.ly = self.ly.wrapping_add(1);
+            self.create_bg_row(memory);
+            if self.ly == 143 {
+                self.mode = 1;
             }
-            pointer += 4;
+        }
+
+        self.step(memory);
+    }
+
+    ///// IMPORTANT /////
+    // Note that my mode 3 is NOT the same as the hardware mode 3. My pixels are "drawn to the LCD" via renderer update.
+    // My mode 3 pushes a row of pixels to the pixel map. NOT THE LCD.
+    // then, when the PPU is ticked, if the line progresses, the current line must be complete in pixel map.
+    // the line is pushed to displaybuffer, then the renderer is updated. 
+    // tldr; hardware mode 3 pushes to LCD, my mode 3 pushes to pixelmap, my ppu draws line when line complete.
+
+    // Process:
+    // Get sprites to be drawn. Store sprite struct in sprite buffer.
+    // Generate array of bg pixels to be drawn... make this as wide as the viewport.
+    // -> Create a temporary array of 32 in create_bg_row. Turn this into 20 (i think?) viewport width by chopping at scx
+    // -> Make sure that this array is generated on the right row... scy + ly? i think?
+    // -> This means can also add window onto row. Do this after and overwrite. 
+    // Merge sprite array and bg/win array. Push result to lcd. 
+
+    pub fn step(&mut self, memory: &Memory) {
+        match self.mode {
+            0 => { self.h_blank(); },
+            1 => { self.v_blank(); },
+            2 => { self.oam_scan(memory); self.oam_scan(memory); },
+            3 => { self.pixel_push(memory); self.pixel_push(memory); self.pixel_push(memory); self.pixel_push(memory); },
+            _ => { unreachable!() },
         }
     }
 
-    pub fn tilemap_scan(&mut self, cpu: &CPU, wx: u8, wy: u8) {
-        let window_map_pointer = if (self.lcdc & 128) == 0 { 0x9800 } else { 0x9C00 }; // checks which tilemap to use
-        let bg_map_pointer = if (self.lcdc & 8) == 0 { 0x9800 } else { 0x9C00 };
-
-        for byte in 0..32 {
-            let mut x = byte as u16;
-            if self.ly >= wy && self.lcdc & 32 != 0 { // check if its equal or below top right most pixel of window, check if window enabled
-                if byte <= wx { // check if its equal or below to left most pixel of window
-                    self.tilemap_row[x as usize] = cpu.memory.read((window_map_pointer + x + 32 as u16 * (self.ly % 8) as u16) as u16); // if it is, get index value for window
-                } 
-                else { self.tilemap_row[x as usize] = cpu.memory.read((bg_map_pointer + x + 32 as u16 * (self.ly % 8) as u16) as u16); } // if its not, get index for bg
-            } 
-            else { self.tilemap_row[x as usize] = cpu.memory.read((bg_map_pointer + x + 32 as u16 * (self.ly % 8) as u16) as u16); } // ^^^
-            x += 1
+    pub fn h_blank(&mut self) { // wait till end of line before skipping to next mode
+        if self.cycles % 456 == 0 { // check if its end of line
+            self.mode = 2;
         }
     }
 
-    pub fn mode_2(&mut self, cpu: &CPU) {
-        self.sprite_scan(cpu.memory.oam); // create buffer of sprites
-        self.tilemap_scan(cpu, cpu.memory.read(0xFF4A), cpu.memory.read(0xFF4B).wrapping_sub(7)); // create buffer of win / bg indexes
+    pub fn v_blank(&mut self) {
+        if self.ly == 153 { // reset cycles / ly at end of frame, step occurs after tick inc ly
+            self.cycles = 0; // meaning that on the next step, if i reset ly, ly will then inc and be 1. 
+            self.ly = 255; // at the start of mode 2. therefore i set it 255, as +1 = 0. 
+            self.mode = 2;
+        }
     }
 
-    pub fn mode_3(&mut self, cpu: &CPU) {
-        self.lcdc = cpu.memory.read(0xff40);
-        self.ly = cpu.memory.read(0xff44);
+    pub fn oam_scan(&mut self, memory: &Memory) { // pushes a single sprite to oam buffer.
+        // THIS ALL NEEDS TO BE CHECKED. CHECKED. CHECKKKEEEDDDDDD. HIGH RISK OF INCORRECT LOGIC.
+        if self.oam_buffer.len() == 10 {
+            return
+        }
 
-        for tile in self.tilemap_row {
-            let bytes_index = if self.lcdc & 16 == 0 && tile < 128 { 0x9000 + tile as u16 * 16 }
-            else { 0x8000 + tile as u16 * 16 };
-            let mut byte_a = cpu.memory.read(bytes_index); // lower byte of bgwin row
-            let mut byte_b = cpu.memory.read(bytes_index + 1); // upper byte of bgwin row
+        while self.oam_pointer < 40 {
+            let height = if (memory.read(0xff40) & 0x4) == 0 { 8 } else { 16 };
+            let y = memory.oam[self.oam_pointer * 4];   
+            let x = memory.oam[(self.oam_pointer * 4).wrapping_add(1)];
+
+            if ((y + height > self.ly.wrapping_add(16)) && (y <= self.ly.wrapping_add(16)) && (x > 0)) { 
+                let index = memory.oam[(self.oam_pointer * 4).wrapping_add(2)];    
+                let attributes = memory.oam[(self.oam_pointer * 4).wrapping_add(3)];
+        
+                let sprite = Sprite::new(y, x, index, attributes);
+                self.oam_buffer.push(sprite);   
+                self.oam_pointer += 1;
+                return
+            }
+            self.oam_pointer += 1;
+        }
+    }    
+
+    pub fn create_bg_row(&mut self, memory: &Memory) { // Note that ly refers to the row of the viewport, and doesnt exceed 153
+        let lcdc = memory.read(0xff40); // Therefore, ly cannot be used to reference pixelmap. It may help to ditch the pixelmap.
+        let bg_map_pointer = if (lcdc & 8) == 0 { 0x9800 } else { 0x9C00 }; // And instead use separate logic with scy / scx. 
+        let bg_data_pointer = if (lcdc & 16) == 0 { 0x9000 } else { 0x8000 };
+        let scy = memory.read(0xff42);
+
+        let pixelmap_row = scy.wrapping_add(self.ly);
+        let tilemap_row = (pixelmap_row / 8_u8) as u16; // Rust will force this to be u8, i.e ignore decimals.
+
+        for x in 0..32_u16 { // for each tile in tilemap_row
+            self.bg_tile_row[x as usize] =  memory.read(bg_map_pointer + tilemap_row*32 + x);
+        }
+
+        let mut pixel_x = 0;
+        for tile in self.bg_tile_row {
+            let row_of_tile = pixelmap_row % 8;
+            let byte_index = (tile + row_of_tile*2) as u16; 
+            let byte_a = memory.read(byte_index);
+            let byte_b = memory.read(byte_index + 1);
+
             for pixel in 0..7 {
-                byte_a = ((byte_a >> (7 - pixel)) & 0b1) << 1;
-                byte_b = (byte_b >> (7 - pixel)) & 0b1;
-                self.pixelmap[self.ly as usize][self.x as usize] = byte_a | byte_b;  
-                self.x += 1;
+                let pixel = byte_a & (0b00000001 << (7 - pixel)) >> (6 - pixel) | (byte_b & 0b00000001 << (7 - pixel)) >> (7 - pixel);
+                self.bg_row[pixel_x] = pixel;
+                pixel_x += 1;
             }
         }
-        self.x = 0;
-
-        for sprite in &self.oam_buffer { // need to add sprite prioritisation
-            if sprite.x == self.x {
-                let bytes_index = sprite.index + (2*(self.ly - sprite.y) % 8); // get the pointer for sprite data on that row
-                let mut byte_a = cpu.memory.vram[bytes_index as usize]; // lower byte of sprite row
-                let mut byte_b = cpu.memory.vram[bytes_index as usize + 1]; // upper byte of sprite row
-                for pixel in 0..7 {
-                    byte_a = ((byte_a >> (7 - pixel)) & 0b1) << 1;
-                    byte_b = (byte_b >> (7 - pixel)) & 0b1;
-                    self.pixelmap[self.ly as usize][self.x as usize] = byte_a | byte_b | 128 | sprite.attributes & 0b00010000 << 2; // signs the pixelmap byte as a sprite pixel  
-                    self.x += 1;
-                }
-            }
-        }
-        self.x = 0;
+        // In theory... this should generate a 255 len array of pixels for the current row...
     }
 
-    pub fn draw_frame(&mut self, cpu: &CPU) { // All palette related logic is completely wrong. Palettes can change. 
-        for row in 0..self.pixelmap.len() {
-            self.mode_2(&cpu);
-            self.mode_3(&cpu);
-            self.ly += 1;
-        }
-
-        let scy = cpu.memory.read(0xff42);
-        let scx = cpu.memory.read(0xff43);
-
-        let mut y = 0;
-        let mut x = 0;
-        for i in 0..(self.renderer.width as usize * self.renderer.height as usize * SDLRenderer::PIXELSIZE) { 
-            // the below logic is wrong. Only works for bg pixels.
-            let mut colour_id = self.pixelmap[((scy + y) as u16 % 256) as usize][((scx + x) as u16 % 256) as usize];
-
-            let mut pixel = Pixel::new(0, 0, 0, 0);
-
-            if colour_id & 0b10000000 == 0 { // is bg/win
-                let palette_value = (cpu.memory.read(0xff47) & (0b00000011 << (colour_id*2))) >> (colour_id*2);
-                let colour = match palette_value {
-                    0 => 0,
-                    1 => 84,
-                    2 => 169,
-                    3 => 255,
-                    _ => 255,
-                };
-                pixel.r = colour;
-                pixel.g = colour;
-                pixel.b = colour;
-                pixel.a = 0;
-            } else { // is sprite 
-                colour_id &= 0b00000011; 
-                let palette_value = (cpu.memory.read(0xff48 + ((colour_id & 0b01000000) >> 6) as u16) & (0b00000011 << (colour_id*2))) >> (colour_id*2);
-                let colour = match palette_value {
-                    0 => 0,
-                    1 => 84,
-                    2 => 169,
-                    3 => 255,
-                    _ => 255,
-                };
-                pixel.r = colour;
-                pixel.g = colour;
-                pixel.b = colour;
-                pixel.a = if colour == 0 { 255 } else { 0 };
-            }
-
-            self.renderer.displaybuffer[i*4] = pixel.r;
-            self.renderer.displaybuffer[i*4 + 1] = pixel.g;
-            self.renderer.displaybuffer[i*4 + 2] = pixel.b;
-            self.renderer.displaybuffer[i*4 + 3] = pixel.a;
-
-            x += 1;
-            if x == 143 { y += 1; x = 0;}
-            if y == 159 { break; }
-        }
-        self.renderer.update();
+    pub fn pixel_push(&mut self, memory: &Memory) { // THIS SHOULD... SHOOOOUUULD... DRAW THE BACKGROUND
+        if self.x != 160 {
+            let scx = memory.read(0xff32);
+            self.renderer.displaybuffer[(self.ly*160).wrapping_add(self.x) as usize] = self.bg_row[scx.wrapping_add(self.x) as usize];
+            self.x += 1;
+        } else { self.mode = 0; self.x = 0; }
     }
 }

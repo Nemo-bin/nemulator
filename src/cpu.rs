@@ -101,6 +101,8 @@ pub struct CPU {
     pub memory: Memory,
     pub pc: u16,
     pub sp: u16,
+    pub t_cycles: u16,
+    pub ppu: PPU,
 }
 
 impl CPU {
@@ -113,13 +115,22 @@ impl CPU {
             memory: Memory::new(),
             pc: 0x100,
             sp: 0xFFFE,
+            t_cycles: 0,
+            ppu: PPU::new(),
         }
+    }
+
+    pub fn m_cycle(&mut self) {
+        self.t_cycles += 4;
+        let memory_ref = &self.memory;
+        self.ppu.tick(memory_ref);
     }
 
     pub fn fetch(&mut self) -> u8 {
         let addr = self.pc;
-        let data = self.memory.read(addr);
+        let data = self.read(addr);
         self.pc = self.pc.wrapping_add(1);
+        self.m_cycle();
         data
     }
 
@@ -129,17 +140,30 @@ impl CPU {
         (upper_byte << 8) | lower_byte 
     }
 
+    pub fn write(&mut self, address: u16, data: u8, ) {
+        self.memory.write(address, data);
+        self.m_cycle();
+    }
+
+    pub fn read(&mut self, address: u16) -> u8 {
+        let data = self.read(address);
+        self.m_cycle();
+        data
+    }
+
     pub fn stack_push(&mut self, num:u16){
         self.sp = self.sp.wrapping_sub(1);
-        self.memory.write(self.sp.into(), (num >> 8) as u8);
+        self.write(self.sp.into(), (num >> 8) as u8);
         self.sp = self.sp.wrapping_sub(1);
-        self.memory.write(self.sp.into(), (num & 0xFF) as u8);
+        self.write(self.sp.into(), (num & 0xFF) as u8);
     }
 
     pub fn stack_pop(&mut self) -> u16{
-        let lower = self.memory.read(self.sp.into()) as u16;
+        let lower = self.read(self.sp.into()) as u16;
+        self.m_cycle();
         self.sp = self.sp.wrapping_add(1);
-        let upper = self.memory.read(self.sp.into()) as u16;
+        let upper = self.read(self.sp.into()) as u16;
+        self.m_cycle();
         self.sp = self.sp.wrapping_add(1);
         ((upper << 8) | lower)
     }
@@ -484,12 +508,14 @@ impl CPU {
     pub fn sp_ld_hl(&mut self) {
         let src = self.registers.get_regW(RegW::HL);
         self.sp = src;
+        self.m_cycle();
     }
 
     pub fn hl_ld_spi8(&mut self) {
         let src = self.fetch() as i8 as i16;
         let temp = src as u8;
         let sum = self.sp.wrapping_add_signed((src));
+        self.m_cycle();
         self.registers.set_regW(RegW::HL, sum);
         self.registers.set_flag(Flag::Z, false);
         self.registers.set_flag(Flag::N, false);
@@ -516,13 +542,13 @@ impl CPU {
     pub fn regWaddr_ld_reg(&mut self, dst: RegW, src: Reg) {
         let dst = self.registers.get_regW(dst);
         let src = self.registers.get_reg(src);
-        self.memory.write(dst, src);
+        self.write(dst, src);
     }
 
     pub fn addr_ld_regA(&mut self) {
         let dst = self.fetchW();
         let src = self.registers.get_reg(Reg::A);
-        self.memory.write(dst, src);
+        self.write(dst, src);
     }
 
     pub fn addr_ld_sp(&mut self) {
@@ -530,53 +556,53 @@ impl CPU {
         let upper = (src >> 8) as u8;
         let lower = src as u8;
         let dst = self.fetchW();
-        self.memory.write(dst, lower);
-        self.memory.write(dst.wrapping_add(1), upper);
+        self.write(dst, lower);
+        self.write(dst.wrapping_add(1), upper);
     }
 
     // Load an address with operand
     pub fn regWaddr_ld_operand(&mut self, dst: RegW) {
         let addr = self.registers.get_regW(dst);
         let src = self.fetch();
-        self.memory.write(addr, src);
+        self.write(addr, src);
     }
 
     // Load a register with the value at an address
     pub fn reg_ld_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         self.registers.set_reg(dst, src);
     }
 
     pub fn regA_ld_addr(&mut self) {
         let dst = self.fetchW();
-        let src = self.memory.read(dst);
+        let src = self.read(dst);
         self.registers.set_reg(Reg::A, src);
     }
 
     // LD (ff00+u8)
     pub fn reg_ld_u8ff00(&mut self) {
         let dst = self.fetch() as u16 + 0xFF00;
-        let src = self.memory.read(dst);
+        let src = self.read(dst);
         self.registers.set_reg(Reg::A, src);
     }
 
     pub fn u8ff00_ld_reg(&mut self) {
         let dst = self.fetch() as u16 + 0xFF00;
         let src = self.registers.get_reg(Reg::A);
-        self.memory.write(dst, src);
+        self.write(dst, src);
     }
 
     pub fn reg_ld_regff00(&mut self) {
         let dst = self.registers.get_reg(Reg::C) as u16 + 0xFF00;
-        let src = self.memory.read(dst);
+        let src = self.read(dst);
         self.registers.set_reg(Reg::A, src);
     }
 
     pub fn regff00_ld_reg(&mut self) {
         let dst = self.registers.get_reg(Reg::C) as u16 + 0xFF00;
         let src = self.registers.get_reg(Reg::A);
-        self.memory.write(dst, src);
+        self.write(dst, src);
     }
 
     // INC / DEC
@@ -593,6 +619,7 @@ impl CPU {
     pub fn inc_regW(&mut self, dst: RegW) {
         let src = self.registers.get_regW(dst).wrapping_add(1);
         self.registers.set_regW(dst, src);
+        self.m_cycle();
     }
 
     // Decrement a register
@@ -613,8 +640,8 @@ impl CPU {
     // Inc / Dec a register address
     pub fn inc_addr(&mut self, dst: RegW) {
         let addr = self.registers.get_regW(dst);
-        let src = self.memory.read(addr);
-        self.memory.write(addr, src.wrapping_add(1));
+        let src = self.read(addr);
+        self.write(addr, src.wrapping_add(1));
         self.registers.set_flag(Flag::Z, src.wrapping_add(1).eval_z());
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, src.eval_h_add(src, 1));
@@ -622,8 +649,8 @@ impl CPU {
 
     pub fn dec_addr(&mut self, dst: RegW) {
         let addr = self.registers.get_regW(dst);
-        let src = self.memory.read(addr);
-        self.memory.write(addr, src.wrapping_sub(1));
+        let src = self.read(addr);
+        self.write(addr, src.wrapping_sub(1));
         self.registers.set_flag(Flag::Z, src.wrapping_sub(1).eval_z());
         self.registers.set_flag(Flag::N, true);
         self.registers.set_flag(Flag::H, src.eval_h_sub(src, 1)); // might not  work for sub
@@ -646,6 +673,7 @@ impl CPU {
         let src = self.registers.get_regW(src);
         let add = self.registers.get_regW(dst);
         let sum = add.wrapping_add(src);
+        self.m_cycle();
         self.registers.set_regW(dst, sum); 
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, src.eval_h_add(src, add));
@@ -655,6 +683,7 @@ impl CPU {
     pub fn regW_add_sp(&mut self, dst: RegW) {
         let src = self.registers.get_regW(dst);
         let sum = src.wrapping_add(self.sp);
+        self.m_cycle();
         self.registers.set_regW(dst, sum);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, sum.eval_h_add(src, self.sp));
@@ -664,7 +693,7 @@ impl CPU {
     // Add value at regW address to register 
     pub fn reg_add_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let add = self.memory.read(addr);
+        let add = self.read(addr);
         let src = self.registers.get_reg(dst);
         let sum = src.wrapping_add(add);
         self.registers.set_reg(dst, sum);
@@ -690,6 +719,8 @@ impl CPU {
         let add = self.fetch() as i8 as i16;
         let src = self.sp as u8;
         self.sp = self.sp.wrapping_add_signed(add);
+        self.m_cycle();
+        self.m_cycle();
         self.registers.set_flag(Flag::Z, false);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, src.eval_h_add(src, add as u8));
@@ -711,7 +742,7 @@ impl CPU {
     // Sub value at regW address from register 
     pub fn reg_sub_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let sub = self.memory.read(addr);
+        let sub = self.read(addr);
         let src = self.registers.get_reg(dst);
         let sum = src.wrapping_sub(sub);
         self.registers.set_reg(dst, sum); 
@@ -749,7 +780,7 @@ impl CPU {
     // Adc value at regW address to register
     pub fn reg_adc_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let cy = self.registers.get_flag(Flag::C) as u8;
         let add = self.registers.get_reg(dst);
         let sum = add.wrapping_add(src).wrapping_add(cy);
@@ -790,7 +821,7 @@ impl CPU {
     pub fn reg_sbc_regWaddr(&mut self, dst: Reg, src: RegW) {
         let cy = self.registers.get_flag(Flag::C) as u8;
         let addr = self.registers.get_regW(src);
-        let sub = self.memory.read(addr);
+        let sub = self.read(addr);
         let src = self.registers.get_reg(dst);
         let sum = src.wrapping_sub(sub).wrapping_sub(cy);
         self.registers.set_reg(dst, sum);
@@ -828,7 +859,7 @@ impl CPU {
     // And register with regW address value
     pub fn reg_and_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let sum = self.registers.get_reg(dst) & src;
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
@@ -862,7 +893,7 @@ impl CPU {
     // Xor register with regW address value
     pub fn reg_xor_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let sum = self.registers.get_reg(dst) ^ src;
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
@@ -896,7 +927,7 @@ impl CPU {
     // Or register with regW address value
     pub fn reg_or_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let sum = self.registers.get_reg(dst) | src;
         self.registers.set_reg(dst, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
@@ -930,7 +961,7 @@ impl CPU {
     // CP value at regW address with register 
     pub fn reg_cp_regWaddr(&mut self, dst: Reg, src: RegW) {
         let addr = self.registers.get_regW(src);
-        let sub = self.memory.read(addr);
+        let sub = self.read(addr);
         let src = self.registers.get_reg(dst);
         let sum = sub.wrapping_sub(src);
         self.registers.set_flag(Flag::Z, sum == 0);
@@ -953,13 +984,13 @@ impl CPU {
     // SP POP / PUSH to register
     pub fn regW_pop_sp(&mut self, dst: RegW) {
         let src = self.stack_pop();
-        println!("{:x} has been POPPED", src);
+        // println!("{:x} has been POPPED", src);
         self.registers.set_regW(dst, src);
     }
 
     pub fn regW_push_sp(&mut self, src: RegW) {
         let src = self.registers.get_regW(src);
-        println!("{:x} has been PUSHED", src);
+        // println!("{:x} has been PUSHED", src);
         self.stack_push(src);
     }
 
@@ -1017,10 +1048,10 @@ impl CPU {
     // RLC (HL)
     pub fn rlc_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let mut src = self.memory.read(addr);
+        let mut src = self.read(addr);
         let cy = src >> 7;
         let sum = ((src << 1) | cy);
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1030,11 +1061,11 @@ impl CPU {
     // RL (HL)
     pub fn rl_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let mut src = self.memory.read(addr);
+        let mut src = self.read(addr);
         let cy = src >> 7;
         let cf = self.registers.get_flag(Flag::C) as u8;
         let sum = ((src << 1) | cf);
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1094,10 +1125,10 @@ impl CPU {
     // RRC (HL)
     pub fn rrc_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let mut src = self.memory.read(addr);
+        let mut src = self.read(addr);
         let cy = src << 7;
         let sum = ((src >> 1) | cy);
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1107,11 +1138,11 @@ impl CPU {
     // RR (HL)
     pub fn rr_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let mut src = self.memory.read(addr);
+        let mut src = self.read(addr);
         let cy = src << 7;
         let cf = self.registers.get_flag(Flag::C) as u8;
         let sum = ((src >> 1) | (cf << 7));
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1133,10 +1164,10 @@ impl CPU {
 
     pub fn sla_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let cy = src >> 7;
         let sum = src << 1;
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1158,11 +1189,11 @@ impl CPU {
 
     pub fn sra_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let msb = src >> 7;
         let cy = src & 0x1;
         let sum = (src >> 1 | msb << 7);
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1183,10 +1214,10 @@ impl CPU {
 
     pub fn srl_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let cy = src << 7;
         let sum = src >> 1;
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1206,9 +1237,9 @@ impl CPU {
 
     pub fn swap_hl(&mut self) {
         let addr = self.registers.get_regW(RegW::HL);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let sum = (src >> 4) | (src << 4);
-        self.memory.write(addr, sum);
+        self.write(addr, sum);
         self.registers.set_flag(Flag::Z, sum == 0);
         self.registers.set_flag(Flag::N, false);
         self.registers.set_flag(Flag::H, false);
@@ -1225,7 +1256,7 @@ impl CPU {
 
     pub fn bit_hl(&mut self, pos: u8) {
         let addr = self.registers.get_regW(RegW::HL);
-        let src = self.memory.read(addr);
+        let src = self.read(addr);
         let bit = (src >> pos) & 0b00000001;
         self.registers.set_flag(Flag::Z, bit == 0);
         self.registers.set_flag(Flag::N, false);
@@ -1241,8 +1272,8 @@ impl CPU {
     pub fn res_hl(&mut self, pos: u8) {
         let addr = self.registers.get_regW(RegW::HL);
         let mask = !(0x01 << pos);
-        let src = self.memory.read(addr);
-        self.memory.write(addr, (src & mask));
+        let src = self.read(addr);
+        self.write(addr, (src & mask));
     }
 
     pub fn set(&mut self, pos: u8, dst: Reg) {
@@ -1254,8 +1285,8 @@ impl CPU {
     pub fn set_hl(&mut self, pos: u8) {
         let addr = self.registers.get_regW(RegW::HL);
         let mask = 0x01 << pos;
-        let src = self.memory.read(addr);
-        self.memory.write(addr, (src | mask));
+        let src = self.read(addr);
+        self.write(addr, (src | mask));
     }    
 
     // Misc
@@ -1312,6 +1343,7 @@ impl CPU {
     pub fn jr(&mut self) {
         let r_pos = self.fetch() as i8;
         self.pc = self.pc.wrapping_add_signed(r_pos.into());
+        self.m_cycle();
     }
 
     // If not flag
@@ -1319,6 +1351,7 @@ impl CPU {
         let r_pos = self.fetch() as i8;
         if !self.registers.get_flag(f) {
             self.pc = self.pc.wrapping_add_signed(r_pos.into());
+            self.m_cycle();
         }
     }
 
@@ -1327,6 +1360,7 @@ impl CPU {
         let r_pos = self.fetch() as i8;
         if self.registers.get_flag(f) {
             self.pc = self.pc.wrapping_add_signed(r_pos.into());
+            self.m_cycle();
         }
     }
 
@@ -1334,6 +1368,7 @@ impl CPU {
     // jp
     pub fn jp(&mut self) {
         let pos = self.fetchW();
+        self.m_cycle();
         self.pc = pos;
     }
 
@@ -1348,6 +1383,7 @@ impl CPU {
         let pos = self.fetchW();
         if !self.registers.get_flag(f) {
             self.pc = pos;
+            self.m_cycle();
         }
     }
 
@@ -1356,16 +1392,19 @@ impl CPU {
         let pos = self.fetchW();
         if self.registers.get_flag(f) {
             self.pc = pos;
+            self.m_cycle();
         }
     }
 
     // RET / Return
     pub fn ret(&mut self) {
         self.pc = self.stack_pop();
+        self.m_cycle();
     }
 
     // If not flag
     pub fn ret_nf(&mut self, f: Flag) {
+        self.m_cycle();
         if !self.registers.get_flag(f) {
             self.pc = self.stack_pop();
         }
@@ -1373,6 +1412,7 @@ impl CPU {
 
     // If flag
     pub fn ret_f(&mut self, f: Flag) {
+        self.m_cycle();
         if self.registers.get_flag(f) {
             self.pc = self.stack_pop();
         }
@@ -1380,6 +1420,7 @@ impl CPU {
 
     pub fn reti(&mut self) {
         self.pc = self.stack_pop();
+        self.m_cycle();
         self.ime = true;
     }
     
@@ -1389,6 +1430,7 @@ impl CPU {
         let pos = self.fetchW();
         self.stack_push(self.pc);
         self.pc = pos;
+        self.m_cycle();
     }
 
     // If not flag
@@ -1397,6 +1439,7 @@ impl CPU {
         if !self.registers.get_flag(f) {
             self.stack_push(self.pc);
             self.pc = pos;
+            self.m_cycle();
         }
     }
 
@@ -1406,12 +1449,14 @@ impl CPU {
         if self.registers.get_flag(f) {
             self.stack_push(self.pc);
             self.pc = pos;
+            self.m_cycle();
         }
     }
 
     // RST - Reset
     pub fn rst(&mut self, rst: u16) {
         self.stack_push(self.pc);
+        self.m_cycle();
         self.pc = rst;
     }
 

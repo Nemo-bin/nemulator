@@ -73,7 +73,7 @@ impl Memory{
             // 0x4000..=0x5FFF => {},
             // 0x6000..=0x7FFF => {},
             // Memory writes
-            0x8000..=0x9FFF => { self.vram[address as usize - 0x8000] = data },
+            0x8000..=0x9FFF => { self.vram[address as usize - 0x8000] = data; },
             0xA000..=0xBFFF => { self.extern_ram[address as usize - 0xA000] = data },
             0xC000..=0xCFFF => { self.ram_bank_0[address as usize - 0xC000] = data },
             0xD000..=0xDFFF => { self.ram_bank_1[address as usize - 0xD000] = data },
@@ -94,26 +94,20 @@ impl Memory{
         //    0x3FFF*((self.rom_bank_number-1) as u16)
         // } 
         //else { 0 };
-        if address == 0xFF44 {
-            let data = 0x90;
-            return data;
-        }
-        else {
-            let data = match address {
-                0..=0x3FFF => self.rom_bank_0[address as usize],
-                0x4000..=0x7FFF => self.rom_bank_n[(address as usize - 0x4000)],
-                0x8000..=0x9FFF => self.vram[address as usize - 0x8000],
-                0xA000..=0xBFFF => self.extern_ram[address as usize - 0xA000],
-                0xC000..=0xCFFF => self.ram_bank_0[address as usize - 0xC000],
-                0xD000..=0xDFFF => self.ram_bank_1[address as usize - 0xD000],
-                0xE000..=0xFDFF => self.mirror[address as usize - 0xE000],
-                0xFE00..=0xFE9F => self.oam[address as usize - 0xFE00],
-                0xFF00..=0xFF7F => self.io_registers[address as usize - 0xFF00],
-                0xFF80..=0xFFFE => self.hram[address as usize - 0xFF80],
-                0xFFFF => self.ie_register[0],
-                _ => { println!("INVALID ADDRESS READ @ {:x}",address); 0u8 }
-            };
-            return data;
-        }
+        let data = match address {
+            0..=0x3FFF => self.rom_bank_0[address as usize],
+            0x4000..=0x7FFF => self.rom_bank_n[(address as usize - 0x4000)],
+            0x8000..=0x9FFF => self.vram[address as usize - 0x8000],
+            0xA000..=0xBFFF => self.extern_ram[address as usize - 0xA000],
+            0xC000..=0xCFFF => self.ram_bank_0[address as usize - 0xC000],
+            0xD000..=0xDFFF => self.ram_bank_1[address as usize - 0xD000],
+            0xE000..=0xFDFF => self.mirror[address as usize - 0xE000],
+            0xFE00..=0xFE9F => self.oam[address as usize - 0xFE00],
+            0xFF00..=0xFF7F => self.io_registers[address as usize - 0xFF00],
+            0xFF80..=0xFFFE => self.hram[address as usize - 0xFF80],
+            0xFFFF => self.ie_register[0],
+            _ => { println!("INVALID ADDRESS READ @ {:x}",address); 0u8 }
+        };
+        return data;
     }
 }
