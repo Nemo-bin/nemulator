@@ -121,7 +121,7 @@ impl CPU {
     }
 
     pub fn m_cycle(&mut self) {
-        self.t_cycles += 4;
+        self.t_cycles = self.t_cycles.wrapping_add(4);
         let memory_ref = &self.memory;
         self.ppu.tick(memory_ref);
     }

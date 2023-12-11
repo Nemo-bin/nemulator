@@ -145,13 +145,10 @@ fn main() {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { running = false; },
                 _ => {},
             }
-            println!("POLLED SUCCESSFULLY");
         }
 
         let opcode = cpu.fetch();
-        println!("FETCHED OPCODE SUCCESSFULLY");
         cpu.execute(opcode);
-        println!("EXECUTED OPCODE SUCCESSFULLY");
         /* if cpu.memory.read(0xFF44) == 0 {
             ppu.draw_frame(&cpu);
         } */ 

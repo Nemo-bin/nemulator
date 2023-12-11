@@ -57,18 +57,19 @@ impl Memory{
         }
     }
 
-    /* pub fn load_rom(&mut self, filename:&str){
+    pub fn load_rom(&mut self, filename:&str){
         let mut f = File::open(filename).expect("Unable to open file!");
-        let mut buffer = [0u8; 512*KIB];
-
+        let mut buffer = vec![0_u8; 512*KIB];
         f.read(&mut buffer);
+
         for i in 0..(32*KIB){
             if i < (16*KIB){
                 self.rom_bank_0[i] = buffer[i]
             } else { self.rom_bank_n[i - 16*KIB] = buffer[i]}
         }
-    } */
+    }
 
+/*
     pub fn load_rom(&mut self, filename:& str) -> Result<()> {
         let mut f = BufReader::new(File::open(filename)?);
 
@@ -80,6 +81,7 @@ impl Memory{
         }
         Ok(())
     }
+*/
 
     // pub fn set_mbc(&mut self) -> u8{
     //     self.read(0x147)

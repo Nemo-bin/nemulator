@@ -253,7 +253,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             let mut tilemap = if memory.read(0xFF40) & 0b00001000 == 0 { 0x9800 } else { 0x9C00 }; 
             let scy = memory.read(0xFF42);
             let scx = memory.read(0xFF43);
-            let offset = (((scx / 8) & 0x1F) + 32 * (((ly + scy) & 0xFF) / 8)) as u16;
+            let offset = (((scx / 8) & 0x1F).wrapping_add(32).wrapping_mul((ly.wrapping_add(scy) & 0xFF) / 8)) as u16;
             tilemap + offset
         };
         self.tile_number = memory.read(address);
@@ -282,15 +282,16 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
         let scy = memory.read(0xFF42);
         let offset = if rendering_window {
             (2 * (self.window_line_counter % 8)) as u16
-        } else { (2 * ((ly + scy) % 8)) as u16};
+        } else { (2 * (ly.wrapping_add(scy) % 8)) as u16};
 
-        let byte_address = tile_address + offset;
+        let byte_address = tile_address.wrapping_add(offset);
 
-        self.tile_data_high = memory.read(byte_address + 1);
+        self.tile_data_high = memory.read(byte_address.wrapping_add(1));
     }
 
     pub fn push_to_fifo(&mut self) -> bool {
-        if !self.bgwin_fifo.is_empty() {
+        if self.bgwin_fifo.is_empty() {
+            println!("PUSHING TO FIFO");
             for pixel_number in 0..7 {
                 let colour_high = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
                 let colour_low = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
@@ -299,7 +300,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
     
                 self.bgwin_fifo.add(pixel);
             }
-            self.fetcher_x += 1;
+            self.fetcher_x = self.fetcher_x.wrapping_add(1);
             true
         } else { false }
     }
@@ -343,12 +344,14 @@ impl PPU  {
 
     pub fn step(&mut self, memory: &Memory) {
         self.cycles = self.cycles.wrapping_add(1);
+        println!("[Cycles: {}] [Mode: {}] [LY: {}] [X: {}]", self.cycles, self.mode, self.ly, self.x);
         self.pixel_fetcher.cycles = self.pixel_fetcher.cycles.wrapping_add(1);
         match self.mode {
             0 => self.h_blank(),
             1 => self.v_blank(),
             2 => { if self.cycles == 80 { 
                         self.mode = 3; 
+                        self.cycles = 0;
                         self.pixel_fetcher.bgwin_fifo.clear(); 
                         self.pixel_fetcher.sprite_fifo.clear(); 
                         }; 
@@ -370,7 +373,7 @@ impl PPU  {
     pub fn h_blank(&mut self) {
         if self.cycles == 456 {
             self.mode = 2;
-            self.ly += 1;
+            self.ly = self.ly.wrapping_add(1);
             self.cycles = 0;
             self.x = 0;
             if self.ly == 144 { self.mode = 1; }
@@ -422,7 +425,13 @@ impl PPU  {
 
         if !self.pixel_fetcher.bgwin_fifo.is_empty() {
             self.push_to_lcd(memory);
-            self.x += 1;
+            self.x = self.x.wrapping_add(1);
+        }
+
+        if self.cycles == 289 {
+            self.cycles = 0;
+            self.mode = 0;
+            self.x = 0;
         }
     }
 
@@ -433,7 +442,7 @@ impl PPU  {
                                         // probably draw a diagram...
         let mut rgb = 0;
 
-        if lcdc & 0b00000001 == 1 {
+        // if lcdc & 0b00000001 == 1 {
             let pixel = self.pixel_fetcher.bgwin_fifo.remove().unwrap(); // pixel.colour tells us the id 
             let palette = memory.read(pixel.palette); // aka which 2 bits of the palette to use
             let colour = (palette & 0b00000011 << pixel.colour_id * 2) >> pixel.colour_id * 2;
@@ -444,11 +453,13 @@ impl PPU  {
                 3 => 0,
                 _ => unreachable!(),
             };
-        }
+        // }
+
+        println!("PIXEL_PUSHED: {}", rgb);
         
-        let displaybuffer_index: usize = ((self.ly * 160 + self.x) * 4) as usize;
+        let displaybuffer_index: usize = ((self.ly.wrapping_mul(160).wrapping_add(self.x)).wrapping_mul(4)) as usize;
         self.renderer.displaybuffer[displaybuffer_index] = rgb;
-        self.renderer.displaybuffer[displaybuffer_index + 1] = rgb;
-        self.renderer.displaybuffer[displaybuffer_index + 2] = rgb;
+        self.renderer.displaybuffer[displaybuffer_index.wrapping_add(1)] = rgb;
+        self.renderer.displaybuffer[displaybuffer_index.wrapping_add(2)] = rgb;
     }
 }
