@@ -146,7 +146,7 @@ impl CPU {
     }
 
     pub fn read(&mut self, address: u16) -> u8 {
-        let data = self.read(address);
+        let data = self.memory.read(address);
         self.m_cycle();
         data
     }
