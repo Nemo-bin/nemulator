@@ -15,6 +15,8 @@ use sdl2::{
     EventPump,
 };
 
+use std::borrow::BorrowMut;
+
 /////////////////////////////// SDL2 ////////////////////////////////
 
 pub struct SDLRenderer {
@@ -94,15 +96,15 @@ pub struct Sprite {
 /////////////////////////////// PIXELS ////////////////////////////////
 
 pub struct SpritePixel {
-    colour: u8,
-    palette: u8,
+    colour_id: u8,
+    palette: u16,
     priority: u8,
 }
 
 impl SpritePixel {
-    pub fn new(colour: u8, palette: u8, priority: u8) -> Self {
+    pub fn new(colour_id: u8, palette: u16, priority: u8) -> Self {
         SpritePixel {
-            colour,
+            colour_id,
             palette,
             priority,
         }
@@ -110,14 +112,14 @@ impl SpritePixel {
 }
 
 pub struct BackgroundPixel {
-    colour: u8,
-    palette: u8,
+    colour_id: u8,
+    palette: u16,
 }
 
 impl BackgroundPixel {
-    pub fn new(colour: u8, palette: u8) -> Self {
+    pub fn new(colour_id: u8, palette: u16) -> Self {
         BackgroundPixel {
-            colour,
+            colour_id,
             palette,
         }
     }
@@ -125,12 +127,93 @@ impl BackgroundPixel {
 
 /////////////////////////////// FIFO ////////////////////////////////
 
+pub struct QueueNode<T> {
+    value: T,
+    next: Option<Box<QueueNode<T>>>
+}
+
+impl<T> QueueNode<T> {
+    pub fn new(value: T) -> Self {
+        QueueNode {
+            value,
+            next: None,
+        }
+    }
+}
+
+pub struct Queue<T> {
+    end: Option<QueueNode<T>>,
+}
+
+impl<T> Queue<T> {
+    pub fn new() -> Self {
+        Queue {
+            end: None,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self.end {
+            None => true,
+            _ => false,
+        }
+    }
+
+    pub fn add(&mut self, value: T) {
+        let new_node = QueueNode::new(value);
+        if let Some(end) = &mut self.end {
+            let mut start = end;
+            loop {
+                if let Some(_) = &start.next {
+                    start = (start.next.as_mut().unwrap())
+                                .borrow_mut();
+                } else { break; }
+            }
+            start.next = Some(Box::new(new_node));
+        } else { self.end = Some(new_node); }
+    }
+
+    pub fn remove(&mut self) -> Option<T> {
+        if !self.is_empty() {
+            let end = std::mem::take(&mut self.end).unwrap();
+            if let Some(next) = end.next {
+                self.end = Some(*next);
+            }
+            Some (end.value)
+        } else { None }
+    }
+
+    pub fn clear(&mut self) {
+        while !self.is_empty() {
+            let end = std::mem::take(&mut self.end).unwrap();
+            if let Some(next) = end.next {
+                self.end = Some(*next);
+            }
+        }
+    }
+}
+
+/////////////////////////////// PIXELFETCHER ////////////////////////////////
+
+pub enum FetcherState {
+    TileNumber,
+    TileDataLow,
+    TileDataHigh,
+    PushToFifo,
+}
+
 pub struct PixelFetcher {
     fetcher_x: u8,
     window_line_counter: u8,
     tile_number: u8,
     tile_data_low: u8,
     tile_data_high: u8,
+
+    cycles: u8,
+    state: FetcherState,
+
+    pub sprite_fifo: Queue<SpritePixel>,
+    pub bgwin_fifo: Queue<BackgroundPixel>,
 }
 
 impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
@@ -141,6 +224,12 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             tile_number: 0,
             tile_data_low: 0,
             tile_data_high: 0,
+
+            cycles: 0,
+            state: FetcherState::TileNumber,
+
+            sprite_fifo: Queue::new(),
+            bgwin_fifo: Queue::new(),
         }
     }
 
@@ -190,9 +279,19 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
         self.tile_data_high = memory.read(byte_address + 1);
     }
 
-    pub fn push_to_fifo() {
-        // To be implemented. 
-        self.fetcher_x += 1;
+    pub fn push_to_fifo(&mut self) -> bool {
+        if !self.bgwin_fifo.is_empty() {
+            for pixel_number in 0..7 {
+                let colour_high = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
+                let colour_low = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
+                let colour = colour_high | colour_low;
+                let pixel = BackgroundPixel::new(colour, 0xFF47);
+    
+                self.bgwin_fifo.add(pixel);
+            }
+            self.fetcher_x += 1;
+            true
+        } else { false }
     }
 }
 
@@ -205,8 +304,6 @@ pub struct PPU {
     pub x: u8,
 
     pub sprite_buffer: Vec<Sprite>,
-    pub sprite_fifo: Vec<SpritePixel>,
-    pub bgwin_fifo: Vec<BackgroundPixel>,
 
     pub renderer: SDLRenderer,
     pub pixel_fetcher: PixelFetcher,
@@ -221,8 +318,6 @@ impl PPU  {
             x: 0,
 
             sprite_buffer: Vec::new(),
-            sprite_fifo: Vec::new(),
-            bgwin_fifo: Vec::new(),
 
             renderer: SDLRenderer::new(160, 144),
             pixel_fetcher: PixelFetcher::new(),
@@ -230,7 +325,27 @@ impl PPU  {
     }
 
     pub fn tick(&mut self, memory: &Memory) {
-        self.cycles = self.cycles.wrapping_add(4);
+        self.step(memory);
+        self.step(memory);
+        self.step(memory);
+        self.step(memory);
+    }
+
+    pub fn step(&mut self, memory: &Memory) {
+        self.cycles = self.cycles.wrapping_add(1);
+        self.pixel_fetcher.cycles = self.pixel_fetcher.cycles.wrapping_add(1);
+        match self.mode {
+            0 => self.h_blank(),
+            1 => self.v_blank(),
+            2 => { if self.cycles == 80 { 
+                        self.mode = 3; 
+                        self.pixel_fetcher.bgwin_fifo.clear(); 
+                        self.pixel_fetcher.sprite_fifo.clear(); 
+                        }; 
+                }, // oam scan - need to implement, will do at another time. 
+            3 => self.mode_3(memory),
+            _ => unreachable!(),
+        }
     }
 
     pub fn rendering_window(&mut self, memory: &Memory) -> bool { // Checks if the ppu is rendering the window and returns bool
@@ -240,5 +355,90 @@ impl PPU  {
         if self.ly >= wy && self.x >= wx && window_enabled {
             true 
         } else { false }
+    }
+
+    pub fn h_blank(&mut self) {
+        if self.cycles == 456 {
+            self.mode = 2;
+            self.ly += 1;
+            self.cycles = 0;
+            self.x = 0;
+            if self.ly == 144 { self.mode = 1; }
+        }
+    }
+
+    pub fn v_blank(&mut self) {
+        if self.cycles == 4560 {
+            self.mode = 2;
+            self.ly = 0;
+            self.cycles = 0;
+            self.x = 0;
+            self.renderer.update();
+        }
+    }
+
+    pub fn mode_3(&mut self, memory: &Memory) { // this needs redoing to work off t cycles
+        let rendering_window = self.rendering_window(memory);
+        match self.pixel_fetcher.state {
+            FetcherState::TileNumber => {
+                if self.pixel_fetcher.cycles == 2 {
+                    self.pixel_fetcher.fetch_tile_number(memory, rendering_window, self.ly);
+                    self.pixel_fetcher.state = FetcherState::TileDataLow;
+                    self.pixel_fetcher.cycles = 0;
+                }
+            },
+            FetcherState::TileDataLow => {
+                if self.pixel_fetcher.cycles == 2 {
+                    self.pixel_fetcher.fetch_tile_data_low(memory, rendering_window, self.ly);
+                    self.pixel_fetcher.state = FetcherState::TileDataHigh;
+                    self.pixel_fetcher.cycles = 0;
+                }
+            },
+            FetcherState::TileDataHigh => {
+                if self.pixel_fetcher.cycles == 2 {
+                    self.pixel_fetcher.fetch_tile_data_high(memory, rendering_window, self.ly);
+                    self.pixel_fetcher.state = FetcherState::PushToFifo;
+                    self.pixel_fetcher.cycles = 0;
+                }
+            },
+            FetcherState::PushToFifo => { // returns "success" status - true if works. 
+                let success = self.pixel_fetcher.push_to_fifo();
+                if success {
+                    self.pixel_fetcher.state = FetcherState::TileNumber;
+                    self.pixel_fetcher.cycles = 0;
+                }
+            },
+        }
+
+        if !self.pixel_fetcher.bgwin_fifo.is_empty() {
+            self.push_to_lcd(memory);
+            self.x += 1;
+        }
+    }
+
+////////////////////////////////////////////////////////////////////
+
+    pub fn push_to_lcd(&mut self, memory: &Memory) { // each pixel pushed takes 1 dot
+        let lcdc = memory.read(0xFF40); // this may very well be wrong, i need to think on how to do this.
+                                        // probably draw a diagram...
+        let mut rgb = 0;
+
+        if lcdc & 0b00000001 == 1 {
+            let pixel = self.pixel_fetcher.bgwin_fifo.remove().unwrap(); // pixel.colour tells us the id 
+            let palette = memory.read(pixel.palette); // aka which 2 bits of the palette to use
+            let colour = (palette & 0b00000011 << pixel.colour_id * 2) >> pixel.colour_id * 2;
+            let rgb = match colour {
+                0 => 255,
+                1 => 169,
+                2 => 84,
+                3 => 0,
+                _ => unreachable!(),
+            };
+        }
+        
+        let displaybuffer_index: usize = ((self.ly * 160 + self.x) * 4) as usize;
+        self.renderer.displaybuffer[displaybuffer_index] = rgb;
+        self.renderer.displaybuffer[displaybuffer_index + 1] = rgb;
+        self.renderer.displaybuffer[displaybuffer_index + 2] = rgb;
     }
 }
