@@ -17,6 +17,16 @@ use sdl2::{
 
 use std::borrow::BorrowMut;
 
+//////////////////////////////// MACROS ////////////////////////////////
+
+macro_rules! box_arr { // boxes arrays onto the heap. 
+    ($t:expr; $size:expr) => {
+        vec![$t; $size].into_boxed_slice().try_into().unwrap()
+    };
+}
+
+// let arr: Box<[u8; 512]> = box_arr![0; 512];
+
 /////////////////////////////// SDL2 ////////////////////////////////
 
 pub struct SDLRenderer {

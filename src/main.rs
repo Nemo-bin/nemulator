@@ -21,6 +21,8 @@ use std::{
 use sdl2::keyboard::Keycode;
 use sdl2::event::Event;
 
+use backtrace::*;
+
 use cpu::CPU;
 use registers::Reg;
 use ppu::PPU;
@@ -30,7 +32,38 @@ const GB_WIDTH:u32 = 160;
 const GB_HEIGHT:u32 = 144;
 const SCALE:u32 = 3;
 
+macro_rules! box_arr {
+    ($t:expr; $size:expr) => {
+        vec![$t; $size].into_boxed_slice().try_into().unwrap()
+    };
+}
+
+// let arr: Box<[u8; 512]> = box_arr![0; 512];
+
 fn main() {
+
+    /////////////////////////////// BACKTRACE ///////////////////////////////
+
+    /*backtrace::trace(|frame| {
+        let ip = frame.ip();
+        let symbol_address = frame.symbol_address();
+
+        // Resolve this instruction pointer to a symbol name
+        backtrace::resolve_frame(frame, |symbol| {
+            if let Some(name) = symbol.name() {
+                println!("{} \n", name);
+            }
+            if let Some(filename) = symbol.filename() {
+                println!("{} \n", filename.display());
+            }
+        });
+
+        true // keep going to the next frame
+    });*/
+
+    println!("Size of memory: {}", std::mem::size_of::<Memory>());
+    println!("Size of ppu: {}", std::mem::size_of::<PPU>());
+    println!("Size of cpu: {}", std::mem::size_of::<CPU>());
 
     /////////////////////////////// ARGUMENTS ///////////////////////////////
 
@@ -43,7 +76,9 @@ fn main() {
     ///////////////////////////////// "MAIN" /////////////////////////////////
 
     let mut cpu = CPU::new();
+    println!("CREATED CPU");
     cpu.memory.load_rom(filename);
+    println!("LOADED ROM");
 
     /*
     fs::remove_file("logfiles/logfile.log").expect("removal failed");
@@ -110,10 +145,13 @@ fn main() {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { running = false; },
                 _ => {},
             }
+            println!("POLLED SUCCESSFULLY");
         }
 
         let opcode = cpu.fetch();
+        println!("FETCHED OPCODE SUCCESSFULLY");
         cpu.execute(opcode);
+        println!("EXECUTED OPCODE SUCCESSFULLY");
         /* if cpu.memory.read(0xFF44) == 0 {
             ppu.draw_frame(&cpu);
         } */ 

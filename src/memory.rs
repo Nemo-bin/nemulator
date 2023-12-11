@@ -1,9 +1,18 @@
 use std::fs::File;
 use std::io::prelude::*;
+use std::io::BufReader;
+use std::io::Result;
 
 const KIB:usize = 1024;
 
-#[derive(Copy, Clone)]
+macro_rules! box_arr {
+    ($t:expr; $size:expr) => {
+        vec![$t; $size].into_boxed_slice().try_into().unwrap()
+    };
+}
+
+// let arr: Box<[u8; 512]> = box_arr![0; 512];
+
 pub struct Memory{
     // MBC registers
     // pub mbc:u8,
@@ -12,18 +21,18 @@ pub struct Memory{
     // pub ram_bank_number:u8,
     // pub banking_mode_select:u8,
     // Memory 
-    pub rom_bank_0:[u8; 16*KIB], // 0000 -> 3FFF | From cartridge, fixed
-    pub rom_bank_n:[u8; 496*KIB], // 4000 -> 7FFF | From cartridge, switchable
-    pub vram:[u8; 8*KIB], // 8000 -> 9FFF | VRAM
-    pub extern_ram:[u8; 8*KIB], // A000 -> BFFF | In cartridge, switchable if any
-    pub ram_bank_0:[u8; 4*KIB], // C000 -> CFFF | Work ram
-    pub ram_bank_1:[u8; 4*KIB], // D000 -> DFFF | Work ram, bank 1 (switchable in CGB)
-    pub mirror:[u8; 0xFDFF- 0xE000 + 1], // E000 -> FDFF | Mirror of C000 -> DDFF | Echo RAM, typically unused
-    pub oam:[u8; 0xFE9F - 0xFE00 + 1], // FE00 -> FE9F | Sprite attribute table (OAM)
+    pub rom_bank_0: Box<[u8; 16*KIB]>, // 0000 -> 3FFF | From cartridge, fixed
+    pub rom_bank_n: Box<[u8; 496*KIB]>, // 4000 -> 7FFF | From cartridge, switchable
+    pub vram: Box<[u8; 8*KIB]>, // 8000 -> 9FFF | VRAM
+    pub extern_ram: Box<[u8; 8*KIB]>, // A000 -> BFFF | In cartridge, switchable if any
+    pub ram_bank_0: Box<[u8; 4*KIB]>, // C000 -> CFFF | Work ram
+    pub ram_bank_1: Box<[u8; 4*KIB]>, // D000 -> DFFF | Work ram, bank 1 (switchable in CGB)
+    pub mirror: Box<[u8; 0xFDFF- 0xE000 + 1]>, // E000 -> FDFF | Mirror of C000 -> DDFF | Echo RAM, typically unused
+    pub oam: Box<[u8; 0xFE9F - 0xFE00 + 1]>, // FE00 -> FE9F | Sprite attribute table (OAM)
     // FEA0 -> FEFF Unusable
-    pub io_registers:[u8; 0xFF7F - 0xFF00 + 1], // FF00 -> FF7F | I/O Registers
-    pub hram:[u8; 0xFFFE - 0xFF80 + 1], // FF80 -> FFFE | High RAM
-    pub ie_register:[u8; 1] // FFFF -> FFFF | Interrupt enable register (IE)
+    pub io_registers: Box<[u8; 0xFF7F - 0xFF00 + 1]>, // FF00 -> FF7F | I/O Registers
+    pub hram: Box<[u8; 0xFFFE - 0xFF80 + 1]>, // FF80 -> FFFE | High RAM
+    pub ie_register: Box<[u8; 1]> // FFFF -> FFFF | Interrupt enable register (IE)
 }
 
 impl Memory{
@@ -34,21 +43,21 @@ impl Memory{
             // rom_bank_number:1,
             // ram_bank_number:0,
             // banking_mode_select:0,
-            rom_bank_0:[0; 16*KIB],
-            rom_bank_n:[0; 496*KIB], 
-            vram:[0; 8*KIB], 
-            extern_ram:[0; 8*KIB], 
-            ram_bank_0:[0; 4*KIB], 
-            ram_bank_1:[0; 4*KIB], 
-            mirror:[0; 0xFDFF- 0xE000 + 1],
-            oam:[0; 0xFE9F - 0xFE00 + 1],
-            io_registers:[0; 0xFF7F - 0xFF00 + 1], // Might need to un array this as io registers can have special behaviour
-            hram:[0; 0xFFFE - 0xFF80 + 1],
-            ie_register:[0; 1] 
+            rom_bank_0: box_arr![0; 16*KIB],
+            rom_bank_n: box_arr![0; 496*KIB], 
+            vram: box_arr![0; 8*KIB], 
+            extern_ram: box_arr![0; 8*KIB], 
+            ram_bank_0: box_arr![0; 4*KIB], 
+            ram_bank_1: box_arr![0; 4*KIB], 
+            mirror: box_arr![0; 0xFDFF- 0xE000 + 1],
+            oam: box_arr![0; 0xFE9F - 0xFE00 + 1],
+            io_registers: box_arr![0; 0xFF7F - 0xFF00 + 1], // Might need to un array this as io registers can have special behaviour
+            hram: box_arr![0; 0xFFFE - 0xFF80 + 1],
+            ie_register: box_arr![0; 1] 
         }
     }
 
-    pub fn load_rom(&mut self, filename:&str){
+    /* pub fn load_rom(&mut self, filename:&str){
         let mut f = File::open(filename).expect("Unable to open file!");
         let mut buffer = [0u8; 512*KIB];
 
@@ -58,6 +67,18 @@ impl Memory{
                 self.rom_bank_0[i] = buffer[i]
             } else { self.rom_bank_n[i - 16*KIB] = buffer[i]}
         }
+    } */
+
+    pub fn load_rom(&mut self, filename:& str) -> Result<()> {
+        let mut f = BufReader::new(File::open(filename)?);
+
+        let pointer = 0;
+        for byte in f.bytes() {
+            if pointer < 16*KIB {
+                self.rom_bank_0[pointer] = byte.unwrap();
+            } else { self.rom_bank_n[pointer - 16*KIB] = byte.unwrap(); }
+        }
+        Ok(())
     }
 
     // pub fn set_mbc(&mut self) -> u8{
