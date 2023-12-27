@@ -2,6 +2,7 @@ mod cpu;
 mod memory;
 mod registers;
 mod ppu;
+mod timer;
 
 use std::{
     io::{
@@ -143,12 +144,20 @@ fn main() {
         for event in cpu.ppu.renderer.event_pump.poll_iter() {
             match event {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { running = false; },
+                Event::KeyDown { keycode: Some(Keycode::T), .. } => { 
+                    let mut vram_pointer = 0x9800;
+                    while vram_pointer <= 0x9FFF {
+                        print!("{} / ", cpu.memory.read(vram_pointer));
+                        vram_pointer += 1;
+                    }
+                },
                 _ => {},
             }
         }
 
         let opcode = cpu.fetch();
         cpu.execute(opcode);
+        cpu.interrupt_poll();
         /* if cpu.memory.read(0xFF44) == 0 {
             ppu.draw_frame(&cpu);
         } */ 

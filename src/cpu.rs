@@ -1,6 +1,121 @@
 use crate::memory::Memory;
 use crate::registers::*;
 use crate::ppu::*;
+use crate::timer::*;
+
+use std::borrow::BorrowMut;
+
+/////////////////////////////// INTERRUPT PRIORITY QUEUE ////////////////////////////////
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum Interrupt {
+    VBlank,
+    STAT,
+    Timer,
+    Serial,
+    Joypad,
+}
+
+// A vec can be used to represent a binary tree, using vec[0] as the root, [1], [2], as its children etc.
+pub struct BinaryHeap {
+    nodes: Vec<Interrupt>,
+}
+
+impl BinaryHeap {
+    pub fn new() -> Self {
+        BinaryHeap {
+            nodes: Vec::new(),
+        }
+    }
+
+    // functions to index parents and children of a node n:
+    pub fn parent_index(n: usize) -> usize {
+        (n - 1) / 2
+    }
+    
+    pub fn left_child(n: usize) -> usize {
+        n * 2
+    }
+
+    pub fn right_child(n: usize) -> usize {
+        n * 2 + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        if self.nodes.len() == 0 {
+            true
+        } else { false }
+    }
+
+    pub fn get_interrupt_priority(int: Interrupt) -> usize {
+        let priority = match int {
+            Interrupt::VBlank => 4,
+            Interrupt::STAT => 3,
+            Interrupt::Timer => 2,
+            Interrupt::Serial => 1,
+            Interrupt::Joypad => 0,
+        };
+        priority
+    }
+
+    pub fn push(&mut self, int: Interrupt) {
+        self.nodes.push(int);
+        self.shift_up(self.nodes.len() - 1);
+    }
+
+    fn shift_up(&mut self, i: usize) {
+        if i == 0 {
+            return;
+        }
+        let int = self.nodes[i];
+        let pushed_priority = Self::get_interrupt_priority(int);
+        let parent = Self::parent_index(i);
+        if Self::get_interrupt_priority(self.nodes[parent]) <= pushed_priority {
+            self.nodes.swap(parent, i);
+            self.shift_up(parent);
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<Interrupt> {
+        if self.nodes.is_empty() {
+            None
+        } else {
+            let i = self.nodes.len() - 1;
+            self.nodes.swap(0, i);
+            self.shift_down(0, i);
+
+            self.nodes.pop()
+        }
+    }
+
+    fn shift_down(&mut self, i: usize, len: usize) {
+        let left_child = Self::left_child(i);
+        let right_child = Self::right_child(i);
+
+        let highest_priority = i;
+
+    if self.nodes.len() > left_child {
+        let left_child_priority = Self::get_interrupt_priority(self.nodes[left_child]);
+        if left_child_priority < len && Self::get_interrupt_priority(self.nodes[i]) <= left_child_priority {
+            let highest_priority = left_child;
+        }
+    }
+
+    if self.nodes.len() > right_child {
+        let right_child_priority = Self::get_interrupt_priority(self.nodes[right_child]);
+        if right_child_priority < len && Self::get_interrupt_priority(self.nodes[i]) <= right_child_priority {
+            let highest_priority = right_child;
+        }
+    }
+
+        if highest_priority != i {
+            self.nodes.swap(i, highest_priority);
+            self.shift_down(highest_priority, len)
+        }
+    }
+}
+
+/////////////////////////////// CPU ////////////////////////////////
 
 trait SupportedDataType {}
 impl SupportedDataType for u8 {}
@@ -101,8 +216,14 @@ pub struct CPU {
     pub memory: Memory,
     pub pc: u16,
     pub sp: u16,
+
     pub t_cycles: u16,
+    pub timer: Timer,
+
     pub ppu: PPU,
+
+    pub interrupt_queue: BinaryHeap,
+    interrupt_queue_bitflags: u8,
 }
 
 impl CPU {
@@ -115,8 +236,14 @@ impl CPU {
             memory: Memory::new(),
             pc: 0x100,
             sp: 0xFFFE,
+
             t_cycles: 0,
+            timer: Timer::new(),
+
             ppu: PPU::new(),
+
+            interrupt_queue: BinaryHeap::new(),
+            interrupt_queue_bitflags: 0,
         }
     }
 
@@ -124,6 +251,115 @@ impl CPU {
         self.t_cycles = self.t_cycles.wrapping_add(4);
         let memory_ref = &self.memory;
         self.ppu.tick(memory_ref);
+        self.timer.inc_sysclk();
+    }
+
+    pub fn set_vblank_flag(&mut self) {
+        if self.ppu.entered_vblank {
+            self.ppu.entered_vblank = false;
+            let interrupt_flags = self.memory.read(0xFF0F);
+            self.memory.write(0xFF0F, interrupt_flags | 0b0000_0001);
+            // println!("VBLANK FLAG SET - {:x}", self.memory.read(0xFF0F));
+        }
+    }
+
+    pub fn set_tima_flag(&mut self) {
+        if self.timer.tima_overflow_irq {
+            self.timer.tima_overflow_irq = false;
+            let interrupt_flags = self.memory.read(0xFF0F);
+            self.memory.write(0xFF0F, interrupt_flags | 0b0000_0100);
+            // println!("TIMER FLAG SET - {:x}", self.memory.read(0xFF0F));
+        }
+    }
+
+    pub fn set_interrupt_queue_bitflag(&mut self, int: Interrupt) {
+        self.interrupt_queue_bitflags |= match int {
+            Interrupt::VBlank => 1,
+            Interrupt::STAT => 2,
+            Interrupt::Timer => 4,
+            Interrupt::Serial => 8,
+            Interrupt::Joypad => 16,
+        };
+    }
+
+    pub fn get_interrupt_queue_bitflag(&mut self, int: Interrupt) -> bool {
+        if (self.interrupt_queue_bitflags & match int {
+            Interrupt::VBlank => 1,
+            Interrupt::STAT => 2,
+            Interrupt::Timer => 4,
+            Interrupt::Serial => 8,
+            Interrupt::Joypad => 16,
+        }) == 0 { false } else { true }
+    }
+
+    pub fn clear_interrupt_queue_bitflag(&mut self, int: Interrupt) {
+        self.interrupt_queue_bitflags &= match int {
+            Interrupt::VBlank => !1,
+            Interrupt::STAT => !2,
+            Interrupt::Timer => !4,
+            Interrupt::Serial => !8,
+            Interrupt::Joypad => !16,
+        };
+    }
+
+    pub fn interrupt_poll(&mut self) { // rewrite this to pop off queue too
+        self.set_vblank_flag();
+        self.set_tima_flag();
+        let interrupt_enable = self.memory.read(0xFFFF);
+        let interrupt_flags = self.memory.read(0xFF0F);
+        for flag in 0..5 {
+            let flag_and = 1 << flag;
+            let interrupt = match flag {
+                0 => Interrupt::VBlank,
+                1 => Interrupt::STAT,
+                2 => Interrupt::Timer,
+                3 => Interrupt::Serial,
+                4 => Interrupt::Joypad,
+                _ => unreachable!(),
+            };
+
+            if !self.get_interrupt_queue_bitflag(interrupt) && (flag_and & interrupt_flags != 0) { 
+                self.interrupt_queue.push(interrupt);
+                self.set_interrupt_queue_bitflag(interrupt);
+                println!("INTERRUPT PUSHED");
+            }
+        }
+
+        let mut ephemeral_buffer: Vec<Interrupt> = Vec::new();
+        if self.interrupt_queue.nodes.len() != 0 {
+            for flag in 0..self.interrupt_queue.nodes.len() {
+                let interrupt = self.interrupt_queue.pop().unwrap(); // pops each one off
+                let interrupt_flag = match interrupt {
+                    Interrupt::VBlank => 1,
+                    Interrupt::STAT => 2,
+                    Interrupt::Timer => 4,
+                    Interrupt::Serial => 8,
+                    Interrupt::Joypad => 16,
+                };
+                if self.ime && ((interrupt_flag & interrupt_enable) != 0) { // tries it
+                    self.handle_interrupt(interrupt); // if allowed, do it
+                    self.memory.write(0xFF0F, interrupt_flags & !interrupt_flag);
+                } else { ephemeral_buffer.push(interrupt); } // if not allowed, push it into buffer
+            }
+            for interrupt in ephemeral_buffer.iter() {
+                self.interrupt_queue.push(*interrupt); // all disallowed interrupts put back into queue
+            }
+        }
+    }
+
+    pub fn handle_interrupt(&mut self, int: Interrupt) {
+        self.m_cycle();
+        self.m_cycle(); // 2 wait cycles while control transferred
+        self.stack_push(self.pc);
+        self.ime = false; // disables interrupts
+        self.pc = match int {
+            Interrupt::VBlank => 0x40,
+            Interrupt::STAT => 0x48,
+            Interrupt::Timer => 0x50,
+            Interrupt::Serial => 0x58,
+            Interrupt::Joypad => 0x60,
+        };
+        println!{"HANDLED INTERRUPT - PC = {:x}", self.pc};
     }
 
     pub fn fetch(&mut self) -> u8 {
@@ -141,12 +377,27 @@ impl CPU {
     }
 
     pub fn write(&mut self, address: u16, data: u8, ) {
-        self.memory.write(address, data);
+        match address {
+            0xFF04..=0xFF07 => {
+                self.timer.write_io(address, data);
+            },
+            _ => { 
+                self.memory.write(address, data); 
+            },
+        }
+        if address == 0xFF0F { println!("@ {:x}", self.pc); }
         self.m_cycle();
     }
 
     pub fn read(&mut self, address: u16) -> u8 {
-        let data = self.memory.read(address);
+        let data = match address {
+            0xFF04..=0xFF07 => {
+                self.timer.read_io(address)
+            },
+            _ => { 
+                self.memory.read(address)
+            },
+        };
         self.m_cycle();
         data
     }
