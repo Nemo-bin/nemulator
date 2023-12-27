@@ -255,8 +255,11 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             let mut tilemap = if memory.read(0xFF40) & 0b00001000 == 0 { 0x9800 } else { 0x9C00 }; 
             let scy = memory.read(0xFF42);
             let scx = memory.read(0xFF43);
-            let offset = (((scx.wrapping_div(8)) & 0x1F).wrapping_add(32).wrapping_mul((ly.wrapping_add(scy) & 0xFF).wrapping_div(8))) as u16;
-            tilemap + offset + self.fetcher_x as u16
+            let offset = (((((ly.wrapping_add(scy) >> 3) & 31) as u16).wrapping_mul(32)).wrapping_add(((self.fetcher_x.wrapping_sub(1) + (scx >> 3)) & 31) as u16)) as u16;
+            println!("OFFSET => {} LY => {} SCY => {} SCX => {} FETCHER_X => {}", offset, ly, scy, scx, self.fetcher_x);
+            // need to make sure the above consistently uses u16s
+            // subbing 1 from fetcher x is due to a bug elsewhere. pls fix. remove sub 1. may cause issues later.
+            tilemap + offset
         };
         self.tile_number = memory.read(address);
         // println!("{}", self.tile_number);
@@ -264,8 +267,8 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
 
     pub fn fetch_tile_data_low(&mut self, memory: &mut Memory, rendering_window: bool, ly: u8) {
         let tile_address = if memory.read(0xFF40) & 0b0001_0000 == 0 && self.tile_number < 128 { 
-            0x9000 + (self.tile_number.wrapping_mul(16)) as u16
-        } else { 0x8000 + (self.tile_number.wrapping_mul(16)) as u16 };
+            0x9000 + ((self.tile_number as u16).wrapping_mul(16))
+        } else { 0x8000 + ((self.tile_number as u16).wrapping_mul(16)) };
 
         let scy = memory.read(0xFF42);
         let offset = if rendering_window {
@@ -279,8 +282,8 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
 
     pub fn fetch_tile_data_high(&mut self, memory: &mut Memory, rendering_window: bool, ly: u8) {
         let tile_address = if memory.read(0xFF40) & 0b0001_0000 == 0 && self.tile_number < 128 { 
-            0x9000 + (self.tile_number.wrapping_mul(16)) as u16
-        } else { 0x8000 + (self.tile_number.wrapping_mul(16)) as u16 };
+            0x9000 + ((self.tile_number as u16).wrapping_mul(16))
+        } else { 0x8000 + ((self.tile_number as u16).wrapping_mul(16)) };
 
         let scy = memory.read(0xFF42);
         let offset = if rendering_window {
@@ -367,7 +370,7 @@ impl PPU  {
     }
 
     pub fn step(&mut self, memory: &mut Memory) {
-        println!("CYCLES => {} MODE => {} X => {} Fetcher Cycles => {}", self.cycles, self.mode, self.x, self.pixel_fetcher.cycles);
+        // println!("CYCLES => {} MODE => {} X => {} LY => {} Fetcher Cycles => {}", self.cycles, self.mode, self.x, self.ly, self.pixel_fetcher.cycles);
         self.cycles = self.cycles.wrapping_add(1);
         self.pixel_fetcher.cycles = self.pixel_fetcher.cycles.wrapping_add(1);
         match self.mode {
@@ -401,6 +404,7 @@ impl PPU  {
             self.inc_ly(memory);
             self.cycles = 0;
             self.x = 0;
+            self.pixel_fetcher.fetcher_x = 0;
             self.mode_3_penalty = 0;
             self.obj_penalty = 0;
         }
