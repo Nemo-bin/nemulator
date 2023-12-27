@@ -221,6 +221,7 @@ pub struct PixelFetcher {
 
     cycles: u8,
     state: FetcherState,
+    first_tile: bool,
 
     pub sprite_fifo: Queue<SpritePixel>,
     pub bgwin_fifo: Queue<BackgroundPixel>,
@@ -237,6 +238,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
 
             cycles: 0,
             state: FetcherState::TileNumber,
+            first_tile: false,
 
             sprite_fifo: Queue::new(),
             bgwin_fifo: Queue::new(),
@@ -244,7 +246,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
     }
 
     // The 4 fetcher steps in order - each takes 2 T-cycles (1/2 of an M-cycle)
-    pub fn fetch_tile_number(&mut self, memory: &Memory, rendering_window: bool, ly: u8) {
+    pub fn fetch_tile_number(&mut self, memory: &mut Memory, rendering_window: bool, ly: u8) {
         let address = if rendering_window {
             let mut tilemap = if memory.read(0xFF40) & 0b01000000 == 0 { 0x9800 } else { 0x9C00 };
             let offset = (32 * (self.window_line_counter / 8)) as u16;
@@ -260,8 +262,8 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
         // println!("{}", self.tile_number);
     }
 
-    pub fn fetch_tile_data_low(&mut self, memory: &Memory, rendering_window: bool, ly: u8) {
-        let tile_address = if memory.read(0xFF40) & 0b00010000 == 0 && self.tile_number < 128 { 
+    pub fn fetch_tile_data_low(&mut self, memory: &mut Memory, rendering_window: bool, ly: u8) {
+        let tile_address = if memory.read(0xFF40) & 0b0001_0000 == 0 && self.tile_number < 128 { 
             0x9000 + (self.tile_number.wrapping_mul(16)) as u16
         } else { 0x8000 + (self.tile_number.wrapping_mul(16)) as u16 };
 
@@ -275,8 +277,8 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
         self.tile_data_low = memory.read(byte_address);
     }
 
-    pub fn fetch_tile_data_high(&mut self, memory: &Memory, rendering_window: bool, ly: u8) {
-        let tile_address = if memory.read(0xFF40) & 0b00010000 == 0 && self.tile_number < 128 { 
+    pub fn fetch_tile_data_high(&mut self, memory: &mut Memory, rendering_window: bool, ly: u8) {
+        let tile_address = if memory.read(0xFF40) & 0b0001_0000 == 0 && self.tile_number < 128 { 
             0x9000 + (self.tile_number.wrapping_mul(16)) as u16
         } else { 0x8000 + (self.tile_number.wrapping_mul(16)) as u16 };
 
@@ -288,6 +290,11 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
         let byte_address = tile_address.wrapping_add(offset);
 
         self.tile_data_high = memory.read(byte_address.wrapping_add(1));
+
+        if self.first_tile {
+            self.first_tile = false;
+            self.state = FetcherState::TileNumber;
+        }
     }
 
     pub fn push_to_fifo(&mut self) -> bool {
@@ -295,10 +302,10 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             // println!("PUSHING TO FIFO");
             for pixel_number in 0..7 {
                 let colour_high = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
-                let colour_low = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
+                let colour_low = ((self.tile_data_low & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
                 let colour = colour_high | colour_low;
                 let pixel = BackgroundPixel::new(colour, 0xFF47);
-    
+
                 self.bgwin_fifo.add(pixel);
             }
             self.fetcher_x = self.fetcher_x.wrapping_add(1);
@@ -352,27 +359,33 @@ impl PPU  {
         }
     }
 
-    pub fn tick(&mut self, memory: &Memory) {
+    pub fn tick(&mut self, memory: &mut Memory) {
         self.step(memory);
         self.step(memory);
         self.step(memory);
         self.step(memory);
     }
 
-    pub fn step(&mut self, memory: &Memory) {
+    pub fn step(&mut self, memory: &mut Memory) {
+        println!("CYCLES => {} MODE => {} X => {} Fetcher Cycles => {}", self.cycles, self.mode, self.x, self.pixel_fetcher.cycles);
         self.cycles = self.cycles.wrapping_add(1);
-        // println!("[Cycles: {}] [Mode: {}] [LY: {}] [X: {}]", self.cycles, self.mode, self.ly, self.x);
         self.pixel_fetcher.cycles = self.pixel_fetcher.cycles.wrapping_add(1);
         match self.mode {
-            0 => self.h_blank(),
-            1 => self.v_blank(),
+            0 => self.h_blank(memory),
+            1 => self.v_blank(memory),
             2 => self.oam_scan(memory), 
             3 => self.mode_3(memory),
             _ => unreachable!(),
         }
     }
 
-    pub fn rendering_window(&mut self, memory: &Memory) { // Checks if the ppu is rendering the window and returns bool
+    pub fn inc_ly(&mut self, memory: &mut Memory) {
+        self.ly = self.ly.wrapping_add(1);
+        let ly = memory.read(0xFF44);
+        memory.write(0xFF44, ly.wrapping_add(1));
+    }
+
+    pub fn rendering_window(&mut self, memory: &mut Memory) { // Checks if the ppu is rendering the window and returns bool
         let wy = memory.read(0xFF4A);
         let wx = memory.read(0xFF4B).wrapping_sub(7);
         let window_enabled = if memory.read(0xFF40) & 0b00100000 == 0 { false } else { true };
@@ -381,11 +394,11 @@ impl PPU  {
         } else { self.rendering_window = false; }
     }
 
-    pub fn h_blank(&mut self) {
-        if self.cycles == (376 - 172 - self.mode_3_penalty - self.obj_penalty) {
+    pub fn h_blank(&mut self, memory: &mut Memory) {
+        if self.cycles == 456 {
             self.mode = 2;
-            if self.ly == 143 { self.mode = 1; }
-            self.ly = self.ly.wrapping_add(1);
+            if self.ly == 143 { self.set_to_v_blank(); }
+            self.inc_ly(memory);
             self.cycles = 0;
             self.x = 0;
             self.mode_3_penalty = 0;
@@ -393,10 +406,11 @@ impl PPU  {
         }
     }
 
-    pub fn v_blank(&mut self) {
+    pub fn v_blank(&mut self, memory: &mut Memory) {
         if self.ly == 153 && self.cycles == 456 {
             self.mode = 2;
             self.ly = 0;
+            memory.write(0xFF44, 0);
             self.cycles = 0;
             self.x = 0;
             self.renderer.update();
@@ -404,17 +418,17 @@ impl PPU  {
             self.entered_vblank = false;
         }
         if self.cycles == 456 {
-            self.ly += 1;
+            self.inc_ly(memory);
             self.cycles = 0;
         }
     }
 
-    pub fn set_to_v_blank(&mut self, memory: &Memory) { 
-        self.mode = 0;
+    pub fn set_to_v_blank(&mut self) { 
+        self.mode = 1;
         self.entered_vblank = true;
     }
 
-    pub fn mode_3(&mut self, memory: &Memory) { // this needs redoing to work off t cycles
+    pub fn mode_3(&mut self, memory: &mut Memory) { // this needs redoing to work off t cycles
         self.rendering_window(memory);
         if self.rendering_window & (self.mode_3_penalty <= 6) {
             self.pixel_fetcher.state = FetcherState::TileNumber;
@@ -466,13 +480,13 @@ impl PPU  {
         }
 
         if self.x == 160 {
-            self.cycles = 0;
-            self.set_to_v_blank(memory);
+            // self.cycles = 0;
+            self.mode = 0;
             self.x = 0;
         }
     }
 
-    pub fn oam_scan(&mut self, memory: &Memory) { // pushes a single sprite to oam buffer.
+    pub fn oam_scan(&mut self, memory: &mut Memory) { // pushes a single sprite to oam buffer.
         // THIS ALL NEEDS TO BE CHECKED. CHECKED. CHECKKKEEEDDDDDD. HIGH RISK OF INCORRECT LOGIC.
         if self.sprite_buffer.len() == 10 {
             return
@@ -480,7 +494,9 @@ impl PPU  {
 
         if self.cycles == 80 { 
             self.mode = 3; 
-            self.cycles = 0;
+            // self.cycles = 0;
+            self.pixel_fetcher.cycles = 0;
+            self.pixel_fetcher.first_tile = true;
             self.pixel_fetcher.bgwin_fifo.clear(); 
             self.pixel_fetcher.sprite_fifo.clear(); 
         }; 
@@ -509,7 +525,7 @@ impl PPU  {
 
 ////////////////////////////////////////////////////////////////////
 
-    pub fn push_to_lcd(&mut self, memory: &Memory) { // each pixel pushed takes 1 dot
+    pub fn push_to_lcd(&mut self, memory: &mut Memory) { // each pixel pushed takes 1 dot
         let lcdc = memory.read(0xFF40); // this may very well be wrong, i need to think on how to do this.
                                         // probably draw a diagram...
         let mut rgb = 0;
@@ -538,7 +554,7 @@ impl PPU  {
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(2);
     }
 
-    pub fn get_current_tile(&mut self, memory: &Memory, sprite: Sprite) {
+    pub fn get_current_tile(&mut self, memory: &mut Memory, sprite: Sprite) {
         let scy = memory.read(0xFF42);
         let scx = memory.read(0xFF43);
     }

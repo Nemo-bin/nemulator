@@ -108,7 +108,7 @@ impl Memory{
             0xFF00..=0xFF7F => { self.io_registers[address as usize - 0xFF00] = data; },
             0xFF80..=0xFFFE => { self.hram[address as usize - 0xFF80] = data },
             0xFFFF => { println!("IE WRITTEN TO => {}", data); self.ie_register[0] = data },
-            _ => { println!("INVALID ADDRESS WRITE @ {:x}",address) }
+            _ => { println!("INVALID ADDRESS WRITE @ {:x}", address); }
         };
     }
 

@@ -147,7 +147,14 @@ fn main() {
                 Event::KeyDown { keycode: Some(Keycode::T), .. } => { 
                     let mut vram_pointer = 0x9800;
                     while vram_pointer <= 0x9FFF {
-                        print!("{} / ", cpu.memory.read(vram_pointer));
+                        print!("{:x} / ", cpu.memory.read(vram_pointer));
+                        vram_pointer += 1;
+                    }
+                },
+                Event::KeyDown { keycode: Some(Keycode::Y), .. } => { 
+                    let mut vram_pointer = 0x8000;
+                    while vram_pointer <= 0x97FF {
+                        print!("{:x} / ", cpu.memory.read(vram_pointer));
                         vram_pointer += 1;
                     }
                 },
@@ -158,9 +165,5 @@ fn main() {
         let opcode = cpu.fetch();
         cpu.execute(opcode);
         cpu.interrupt_poll();
-        /* if cpu.memory.read(0xFF44) == 0 {
-            ppu.draw_frame(&cpu);
-        } */ 
-        // print!("{:?}", ppu.renderer.displaybuffer);
     }
 }

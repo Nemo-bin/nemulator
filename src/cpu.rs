@@ -4,6 +4,7 @@ use crate::ppu::*;
 use crate::timer::*;
 
 use std::borrow::BorrowMut;
+use std::{thread, time};
 
 /////////////////////////////// INTERRUPT PRIORITY QUEUE ////////////////////////////////
 
@@ -249,9 +250,10 @@ impl CPU {
 
     pub fn m_cycle(&mut self) {
         self.t_cycles = self.t_cycles.wrapping_add(4);
-        let memory_ref = &self.memory;
+        let memory_ref = &mut self.memory;
         self.ppu.tick(memory_ref);
         self.timer.inc_sysclk();
+        // thread::sleep(time::Duration::from_nanos(1));
     }
 
     pub fn set_vblank_flag(&mut self) {
@@ -420,6 +422,7 @@ impl CPU {
     }
 
     pub fn execute(&mut self, mut opcode:u8) {
+        // println!("EXECUTING OPCODE => {:x} @ PC => {}", opcode, self.pc);
         if self.ime_waiting && opcode != 0xFB {
             self.ime = true;
             self.ime_waiting = false;
@@ -835,6 +838,7 @@ impl CPU {
     pub fn reg_ld_u8ff00(&mut self) {
         let dst = self.fetch() as u16 + 0xFF00;
         let src = self.read(dst);
+        // println!("{:x} LOADED TO REG FROM => {:x}", src, dst);
         self.registers.set_reg(Reg::A, src);
     }
 
