@@ -265,6 +265,15 @@ impl CPU {
         }
     }
 
+    pub fn set_stat_flag(&mut self) {
+        if self.ppu.stat_irq {
+            self.ppu.stat_irq = false;
+            let interrupt_flags = self.memory.read(0xFF0F);
+            self.memory.write(0xFF0F, interrupt_flags | 0b0000_0010);
+            // println!("STAT FLAG SET - {:x}", self.memory.read(0xFF0F));
+        }
+    }
+
     pub fn set_tima_flag(&mut self) {
         if self.timer.tima_overflow_irq {
             self.timer.tima_overflow_irq = false;
@@ -307,6 +316,7 @@ impl CPU {
     pub fn interrupt_poll(&mut self) { // rewrite this to pop off queue too
         self.set_vblank_flag();
         self.set_tima_flag();
+        self.set_stat_flag();
         let interrupt_enable = self.memory.read(0xFFFF);
         let interrupt_flags = self.memory.read(0xFF0F);
         for flag in 0..5 {
@@ -323,7 +333,7 @@ impl CPU {
             if !self.get_interrupt_queue_bitflag(interrupt) && (flag_and & interrupt_flags != 0) { 
                 self.interrupt_queue.push(interrupt);
                 self.set_interrupt_queue_bitflag(interrupt);
-                println!("INTERRUPT PUSHED");
+                // println!("INTERRUPT PUSHED");
             }
         }
 
@@ -361,7 +371,8 @@ impl CPU {
             Interrupt::Serial => 0x58,
             Interrupt::Joypad => 0x60,
         };
-        println!{"HANDLED INTERRUPT - PC = {:x}", self.pc};
+        // println!{"HANDLED INTERRUPT - PC = {:x}", self.pc};
+        self.clear_interrupt_queue_bitflag(int);
     }
 
     pub fn fetch(&mut self) -> u8 {

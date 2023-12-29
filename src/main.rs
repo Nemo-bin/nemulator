@@ -158,6 +158,7 @@ fn main() {
                         vram_pointer += 1;
                     }
                 },
+                // Keybinds: (potentially temporary) WASD => DPad, Q => A, E => B, R => Start, F => Select
                 _ => {},
             }
         }
