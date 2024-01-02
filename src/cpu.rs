@@ -115,6 +115,45 @@ impl BinaryHeap {
         }
     }
 }
+////////////////////////////// INPUTS ///////////////////////////////
+pub struct InputStates {
+    pub down: bool,
+    pub up: bool,
+    pub left: bool,
+    pub right: bool,
+
+    pub start: bool,
+    pub select: bool,
+    pub b: bool, 
+    pub a: bool,
+}
+
+impl InputStates {
+    pub fn new() -> Self {
+        InputStates {
+            down: false,
+            up: false,
+            left: false,
+            right: false,
+
+            start: false,
+            select: false,
+            b: false,
+            a: false,
+        }
+    }
+
+    pub fn get_states(&mut self, joyp: u8) -> u8 {
+        if joyp & 0b0010_0000 != 0 && joyp & 0b0001_0000 == 0 { // Dpad selected
+            let states = 0b0001_0000 | (self.down as u8) << 3 | (self.up as u8) << 2 | (self.left as u8) << 1 | (self.right as u8); 
+            !states
+        } else if joyp & 0b0010_0000 == 0 && joyp & 0b0001_0000 != 0 {
+            let states = 0b0010_0000 | (self.start as u8) << 3 | (self.select as u8) << 2 | (self.b as u8) << 1 | (self.a as u8); 
+            !states
+        } else { 0xFF }
+    }
+}
+
 
 /////////////////////////////// CPU ////////////////////////////////
 
@@ -225,6 +264,8 @@ pub struct CPU {
 
     pub interrupt_queue: BinaryHeap,
     interrupt_queue_bitflags: u8,
+
+    pub input_states: InputStates,
 }
 
 impl CPU {
@@ -245,6 +286,7 @@ impl CPU {
 
             interrupt_queue: BinaryHeap::new(),
             interrupt_queue_bitflags: 0,
+            input_states: InputStates::new(),
         }
     }
 
@@ -334,6 +376,7 @@ impl CPU {
                 self.interrupt_queue.push(interrupt);
                 self.set_interrupt_queue_bitflag(interrupt);
                 // println!("INTERRUPT PUSHED");
+                self.halted = false;
             }
         }
 
@@ -404,6 +447,10 @@ impl CPU {
 
     pub fn read(&mut self, address: u16) -> u8 {
         let data = match address {
+            0xFF00 => {
+                let joyp = self.memory.read(0xFF00);
+                self.input_states.get_states(joyp)
+            },
             0xFF04..=0xFF07 => {
                 self.timer.read_io(address)
             },

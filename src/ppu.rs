@@ -218,6 +218,8 @@ pub struct PixelFetcher {
     tile_number: u8,
     tile_data_low: u8,
     tile_data_high: u8,
+    sprite_tile_data_low: u8,
+    sprite_tile_data_high: u8,
 
     rendering_window: bool,
 
@@ -237,6 +239,8 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             tile_number: 0,
             tile_data_low: 0,
             tile_data_high: 0,
+            sprite_tile_data_low: 0,
+            sprite_tile_data_high: 0,
 
             rendering_window: false,
 
@@ -256,6 +260,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             let wx = memory.read(0xFF4A);
             let wy = memory.read(0xFF4B);
             let offset = ((((self.window_line_counter.wrapping_div(8)).wrapping_mul(32)).wrapping_add(self.fetcher_x & 0x1F)) as u16) & 0x3fff; //(32 * (self.window_line_counter / 8)) as u16;
+            // println!("GETTING WINDOW TILES");
             tilemap + offset
         } else { 
             let mut tilemap = if memory.read(0xFF40) & 0b00001000 == 0 { 0x9800 } else { 0x9C00 }; 
@@ -263,8 +268,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             let scx = memory.read(0xFF43);
             let offset = (((((ly.wrapping_add(scy) >> 3) & 31) as u16).wrapping_mul(32)).wrapping_add((((self.fetcher_x).wrapping_add(scx >> 3)) & 31) as u16)) as u16;
             // println!("OFFSET => {} LY => {} SCY => {} SCX => {} FETCHER_X => {}", offset, ly, scy, scx, self.fetcher_x);
-            // need to make sure the above consistently uses u16s
-            // subbing 1 from fetcher x is due to a bug elsewhere. pls fix. remove sub 1. may cause issues later.
+            // println!("NOT GETTING WINDOW TILES");
             tilemap + offset
         };
         self.tile_number = memory.read(address);
@@ -280,7 +284,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             (2 * (self.window_line_counter % 8)) as u16
         } else { (2 * ((ly.wrapping_add(scy)) % 8)) as u16};
 
-        let byte_address = tile_address + offset;
+        let byte_address = tile_address.wrapping_add(offset);
 
         self.tile_data_low = memory.read(byte_address);
     }
@@ -302,6 +306,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
         if self.first_tile {
             self.first_tile = false;
             self.state = FetcherState::TileNumber;
+            // println!("RESET TO TILENUMBER STATE")
         }
     }
 
@@ -316,9 +321,49 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
 
                 self.bgwin_fifo.add(pixel);
             }
+            // println!("FETCHERX => {}, FIRSTILE => {}", self.fetcher_x, self.first_tile);
             self.fetcher_x = self.fetcher_x.wrapping_add(1);
             true
         } else { false }
+    }
+
+    pub fn sprite_fetch_tile_data_low(&mut self, memory: &mut Memory, ly: u8, tile_number: u8) {
+        let tile_address = 0x8000 + ((tile_number as u16).wrapping_mul(16));
+
+        let scy = memory.read(0xFF42);
+        let offset = (2 * ((ly.wrapping_add(scy)) % 8)) as u16;
+
+        let byte_address = tile_address.wrapping_add(offset);
+
+        self.sprite_tile_data_low = memory.read(byte_address);
+    }
+
+    pub fn sprite_fetch_tile_data_high(&mut self, memory: &mut Memory, ly: u8, tile_number: u8) {
+        let tile_address = 0x8000 + ((tile_number as u16).wrapping_mul(16));
+
+        let scy = memory.read(0xFF42);
+        let offset = (2 * ((ly.wrapping_add(scy)) % 8)) as u16;
+
+        let byte_address = tile_address.wrapping_add(offset);
+
+        self.sprite_tile_data_high = memory.read(byte_address.wrapping_add(1));
+    }
+
+    pub fn push_to_sprite_fifo(&mut self, sprite: Sprite) {
+        for pixel_number in 0..=7 {
+            let colour_high = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
+            let colour_low = ((self.tile_data_low & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
+            let colour = colour_high | colour_low;
+            let palette = match (sprite.attributes & 0b0001_0000) >> 4 {
+                0 => 0xFF48,
+                1 => 0xFF40,
+                _ => unreachable!(),
+            };
+            let priority = (sprite.attributes & 0b1000_0000) >> 7;
+            let pixel = SpritePixel::new(colour, palette, priority);
+
+            self.sprite_fifo.add(pixel);
+        }
     }
 }
 
@@ -437,6 +482,7 @@ impl PPU  {
     pub fn h_blank(&mut self, memory: &mut Memory) {
         if self.rendering_window {
             self.rendering_window = false;
+            self.pixel_fetcher.rendering_window = false;
             self.pixel_fetcher.window_line_counter = self.pixel_fetcher.window_line_counter.wrapping_add(1);
         }
         if self.cycles == 456 {
@@ -444,6 +490,8 @@ impl PPU  {
                 self.set_to_v_blank(memory); 
             } else { 
                 self.mode = 2;
+                self.pixel_fetcher.bgwin_fifo.clear();
+                // println!("NEW SCANLINE");
                 let stat = memory.read(0xFF41);
                 if stat & 0b0010_0000 != 0 && self.ly != memory.read(0xFF45) {
                     self.stat_irq = true;
@@ -492,7 +540,6 @@ impl PPU  {
     }
 
     pub fn mode_3(&mut self, memory: &mut Memory) { // this needs redoing to work off t cycles
-
         match self.pixel_fetcher.state {
             FetcherState::TileNumber => {
                 if self.pixel_fetcher.cycles == 2 {
@@ -520,6 +567,7 @@ impl PPU  {
                 if success {
                     self.pixel_fetcher.state = FetcherState::TileNumber;
                     self.pixel_fetcher.cycles = 0;
+                    // println!("INCREMENTED FETCHER X => {} X => {}", self.pixel_fetcher.fetcher_x, self.x);
                 }
             },
         }
@@ -557,6 +605,7 @@ impl PPU  {
 
         if self.cycles == 80 { 
             self.mode = 3;
+            self.pixel_fetcher.state = FetcherState::TileNumber;
             let stat = memory.read(0xFF41);
             memory.write(0xFF41, (stat & !0b0000_0011) | self.mode);
             // self.cycles = 0;
@@ -612,10 +661,10 @@ impl PPU  {
         self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(1);
         self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
-        if self.x == 0 {
+        /* if self.x == 0 || self.x == 8 {
             self.renderer.displaybuffer[self.displaybuffer_index] = 0;
-            println!("TILE NUMBER => {} SCY => {} SCX => {} LY => {} FetcherX => {}", self.pixel_fetcher.tile_number, memory.read(0xFF42), memory.read(0xFF43), self.ly, self.pixel_fetcher.fetcher_x);
-        }
+            // println!("TILE NUMBER => {} SCY => {} SCX => {} LY => {} FetcherX => {}", self.pixel_fetcher.tile_number, memory.read(0xFF42), memory.read(0xFF43), self.ly, self.pixel_fetcher.fetcher_x);
+        }*/
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(1);
         self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(2);

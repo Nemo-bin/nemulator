@@ -5,15 +5,8 @@ mod ppu;
 mod timer;
 
 use std::{
-    io::{
-        BufReader,
-        prelude::*,
-        Write,
-    },
-    fs::{
-        File,
-        OpenOptions,
-    },
+    io,
+    fs,
     env,
     thread,
     time::Duration,
@@ -23,6 +16,21 @@ use sdl2::keyboard::Keycode;
 use sdl2::event::Event;
 
 use backtrace::*;
+
+use tui::{
+    backend::CrosstermBackend,
+    widgets::{Tabs, Widget, Block, Borders, Paragraph, List, ListItem, ListState},
+    layout::{Alignment, Layout, Constraint, Direction},
+    style::{Color, Style},
+    symbols::DOT,
+    text::{Spans, Span},
+    Terminal
+};
+use crossterm::{
+    event::{self, poll, read, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyEvent, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 
 use cpu::CPU;
 use registers::Reg;
@@ -39,9 +47,49 @@ macro_rules! box_arr {
     };
 }
 
-// let arr: Box<[u8; 512]> = box_arr![0; 512];
+struct RomList {
+    items: Vec<String>,
+    state: ListState,
+}
 
-fn main() {
+impl RomList {
+    pub fn new(items: Vec<String>) -> Self {
+        RomList {
+            items,
+            state: ListState::default(),
+        }
+    }
+
+    pub fn update_items(&mut self, items: Vec<String>) {
+        self.items = items;
+    }
+
+    pub fn next(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i >= self.items.len() - 1 {
+                    0
+                } else { i + 1 }
+            },
+            None => 0
+        };
+        self.state.select(Some(i));
+    }
+
+    pub fn previous(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.items.len() -1
+                } else { i - 1 }
+            },
+            None => 0
+        };
+        self.state.select(Some(i));  
+    }
+}
+
+fn main() -> Result<(), io::Error> {
 
     /////////////////////////////// BACKTRACE ///////////////////////////////
 
@@ -68,16 +116,178 @@ fn main() {
 
     /////////////////////////////// ARGUMENTS ///////////////////////////////
 
-    let args:Vec<String> = env::args().collect();
-    let filename = &args[1];
+    /*let args:Vec<String> = env::args().collect();
+    let mut filename = &args[1];
     if args.len() == 3 {
         let blargg_log_number = format!("blarggs_logs/{}", &args[2]);
+    }*/
+    /////////////////////////////////// TUI ///////////////////////////////////
+
+    enable_raw_mode().expect("User input enabled");
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    let tabs_options:Vec<_> = ["Library", "Settings"]
+    .iter().cloned().map(Spans::from).collect();
+
+    let mut tab_index:usize = 0;
+    let mut true_tab_index = 0;
+    let mut rom_list_index = 0;
+    let mut true_rom_list_index = 0;
+
+    let mut darkest_green = Color::Rgb(15, 56, 15);
+    let mut dark_green = Color::Rgb(48, 98, 48);
+    let mut lightest_green = Color::Rgb(155, 188, 15);
+
+    let mut roms: Vec<String> = Vec::new();
+    let mut stateful_rom_list = RomList::new(roms);
+    stateful_rom_list.state.select(Some(0));
+
+    let mut filename = &String::from("TEMP");
+
+    'running:loop {
+
+        // FILES
+
+        let entries = fs::read_dir("./").unwrap();
+        let mut temp_roms: Vec<String> = Vec::new();
+        for dir_entry in entries {
+            let path = dir_entry.as_ref().unwrap().path();
+            if let Some(extension) = path.extension() {
+                if extension == "gb" {
+                    let filename = path.file_name().and_then(|s| s.to_str()).unwrap().to_owned();
+                    temp_roms.push(filename);
+                }
+            }
+        }
+
+        stateful_rom_list.update_items(temp_roms);
+
+        terminal.draw(|f| {
+            let size = f.size();
+            let block = Block::default()
+                .title("Block")
+                .borders(Borders::ALL)
+                .style(Style::default().bg(lightest_green));
+            f.render_widget(block, size);
+
+            // MASTER LAYOUT
+            let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(10),
+                          Constraint::Percentage(90)].as_ref())
+            .split(size);
+
+            // LIBRARY LAYOUT
+            let library_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(100)].as_ref())
+            .split(chunks[1]);
+            let library_layout_horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50),
+                          Constraint::Percentage(50)].as_ref())
+            .split(library_layout[0]);
+
+            // SETTINGS LAYOUT
+            let settings_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(90),
+                          Constraint::Percentage(10)].as_ref())
+            .split(chunks[1]);
+            let settings_layout_horizontal = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30),
+                          Constraint::Percentage(70)].as_ref())
+            .split(settings_layout[0]);
+
+            // TABS SETUP
+            true_tab_index = tab_index % tabs_options.len();
+
+            let tabs = Tabs::new(tabs_options.clone())
+            .select(true_tab_index)
+            .style(Style::default().fg(dark_green))
+            .highlight_style(Style::default().fg(darkest_green))
+            .divider(Span::raw("|"))
+            .block(
+                Block::default().title("Tabs").borders(Borders::ALL)
+            );
+
+            // WIDGETS
+            let items: Vec<ListItem> = stateful_rom_list.items.iter().map(|i| ListItem::new(i.as_ref())).collect();
+            let library_list = List::new(items)
+                .block(Block::default().title("In your library").borders(Borders::ALL))
+                .style(Style::default().fg(dark_green))
+                .highlight_style(Style::default().fg(darkest_green))
+                .highlight_symbol(">>");
+
+            let content = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().fg(darkest_green));
+
+            // RENDERING
+            match true_tab_index {
+                0 => {
+                    f.render_widget(tabs, chunks[0]);
+                    f.render_widget(content, chunks[1]);
+                    f.render_stateful_widget(library_list, library_layout_horizontal[0], &mut stateful_rom_list.state);
+                }
+                1 => {
+                    
+                    f.render_widget(tabs, chunks[0]);
+                    f.render_widget(content, chunks[1]);
+                }
+                _ => {}
+            };
+
+        })?;  
+
+        if poll(std::time::Duration::from_millis(100))?{
+            match read()?{
+                CrosstermEvent::Key(KeyEvent {code:KeyCode::Esc, ..}, ..) => {
+                    disable_raw_mode()?;
+                    execute!(
+                        terminal.backend_mut(),
+                        LeaveAlternateScreen,
+                        DisableMouseCapture
+                    )?;
+                    terminal.show_cursor()?;
+                    break 'running;
+                },
+                CrosstermEvent::Key(KeyEvent {code:KeyCode::Left, ..}, ..) => 
+                    if tab_index > 0 {tab_index -= 1}
+                    else {tab_index = tabs_options.len() - 1},
+                CrosstermEvent::Key(KeyEvent {code:KeyCode::Right, ..}, ..) =>
+                    if tab_index < (tabs_options.len() -1) {tab_index += 1}
+                    else {tab_index = 0},
+                CrosstermEvent::Key(KeyEvent {code:KeyCode::Up, ..}, ..) =>
+                    { stateful_rom_list.previous(); }
+                CrosstermEvent::Key(KeyEvent {code:KeyCode::Down, ..}, ..) =>
+                    { stateful_rom_list.next(); }
+                CrosstermEvent::Key(KeyEvent {code:KeyCode::Enter, ..}, ..) => {
+                    disable_raw_mode()?;
+                    execute!(
+                        terminal.backend_mut(),
+                        LeaveAlternateScreen,
+                        DisableMouseCapture
+                    )?;
+                    terminal.show_cursor()?;
+                    filename = &stateful_rom_list.items[stateful_rom_list.state.selected().unwrap()];
+                    break 'running;
+                }
+                _ => {},
+            }
+        } else{}
     }
 
     ///////////////////////////////// "MAIN" /////////////////////////////////
 
     let mut cpu = CPU::new();
     println!("CREATED CPU");
+    println!("FILE => {}", filename);
     cpu.memory.load_rom(filename);
     println!("LOADED ROM");
 
@@ -159,12 +369,66 @@ fn main() {
                     }
                 },
                 // Keybinds: (potentially temporary) WASD => DPad, Q => A, E => B, R => Start, F => Select
+                // Ordered as they are in JOYP
+                Event::KeyDown { keycode: Some(Keycode::S), .. } => {
+                    cpu.input_states.down = true;
+                },
+                Event::KeyDown { keycode: Some(Keycode::W), .. } => {
+                    cpu.input_states.up = true;
+                },
+                Event::KeyDown { keycode: Some(Keycode::A), .. } => {
+                    cpu.input_states.left = true;
+                },
+                Event::KeyDown { keycode: Some(Keycode::D), .. } => {
+                    cpu.input_states.right = true;
+                },
+                Event::KeyDown { keycode: Some(Keycode::R), .. } => {
+                    cpu.input_states.start = true;                    
+                },
+                Event::KeyDown { keycode: Some(Keycode::F), .. } => {
+                    cpu.input_states.select = true;
+                },
+                Event::KeyDown { keycode: Some(Keycode::E), .. } => {
+                    cpu.input_states.b = true;
+                },
+                Event::KeyDown { keycode: Some(Keycode::Q), .. } => {
+                    cpu.input_states.a = true;
+                },
+                // Input keys released
+                Event::KeyUp { keycode: Some(Keycode::S), .. } => {
+                    cpu.input_states.down = false;
+                },
+                Event::KeyUp { keycode: Some(Keycode::W), .. } => {
+                    cpu.input_states.up = false;
+                },
+                Event::KeyUp { keycode: Some(Keycode::A), .. } => {
+                    cpu.input_states.left = false;
+                },
+                Event::KeyUp { keycode: Some(Keycode::D), .. } => {
+                    cpu.input_states.right = false;
+                },
+                Event::KeyUp { keycode: Some(Keycode::R), .. } => {
+                    cpu.input_states.start = false;                    
+                },
+                Event::KeyUp { keycode: Some(Keycode::F), .. } => {
+                    cpu.input_states.select = false;
+                },
+                Event::KeyUp { keycode: Some(Keycode::E), .. } => {
+                    cpu.input_states.b = false;
+                },
+                Event::KeyUp { keycode: Some(Keycode::Q), .. } => {
+                    cpu.input_states.a = false;
+                },
                 _ => {},
             }
         }
 
-        let opcode = cpu.fetch();
-        cpu.execute(opcode);
+        if !cpu.halted {
+            let opcode = cpu.fetch();
+            cpu.execute(opcode);
+        } else { cpu.m_cycle(); }
         cpu.interrupt_poll();
     }
+
+    Ok(())
 }

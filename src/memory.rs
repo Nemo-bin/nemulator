@@ -126,8 +126,7 @@ impl Memory{
             0xD000..=0xDFFF => self.ram_bank_1[address as usize - 0xD000],
             0xE000..=0xFDFF => self.mirror[address as usize - 0xE000],
             0xFE00..=0xFE9F => self.oam[address as usize - 0xFE00],
-            0xFF00 => 0xFF, // stubbed joypad to 0xFF temporarily, remember to adjust range below
-            0xFF01..=0xFF7F => self.io_registers[address as usize - 0xFF00],
+            0xFF00..=0xFF7F => self.io_registers[address as usize - 0xFF00],
             0xFF80..=0xFFFE => self.hram[address as usize - 0xFF80],
             0xFFFF => self.ie_register[0],
             _ => { println!("INVALID ADDRESS READ @ {:x}",address); 0u8 }
