@@ -153,12 +153,14 @@ impl<T> QueueNode<T> {
 
 pub struct Queue<T> {
     end: Option<QueueNode<T>>,
+    len: u8,
 }
 
 impl<T> Queue<T> {
     pub fn new() -> Self {
         Queue {
             end: None,
+            len: 0,
         }
     }
 
@@ -181,6 +183,7 @@ impl<T> Queue<T> {
             }
             start.next = Some(Box::new(new_node));
         } else { self.end = Some(new_node); }
+        self.len += 1;
     }
 
     pub fn remove(&mut self) -> Option<T> {
@@ -189,6 +192,7 @@ impl<T> Queue<T> {
             if let Some(next) = end.next {
                 self.end = Some(*next);
             }
+            self.len -= 1;
             Some (end.value)
         } else { None }
     }
@@ -199,6 +203,7 @@ impl<T> Queue<T> {
             if let Some(next) = end.next {
                 self.end = Some(*next);
             }
+            self.len -= 1;
         }
     }
 }
@@ -224,7 +229,8 @@ pub struct PixelFetcher {
     rendering_window: bool,
 
     cycles: u8,
-    state: FetcherState,
+    bgwin_state: FetcherState,
+    sprite_state: FetcherState,
     first_tile: bool,
 
     pub sprite_fifo: Queue<SpritePixel>,
@@ -245,7 +251,8 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
             rendering_window: false,
 
             cycles: 0,
-            state: FetcherState::TileNumber,
+            bgwin_state: FetcherState::TileNumber,
+            sprite_state: FetcherState::TileNumber,
             first_tile: false,
 
             sprite_fifo: Queue::new(),
@@ -305,21 +312,24 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
 
         if self.first_tile {
             self.first_tile = false;
-            self.state = FetcherState::TileNumber;
+            self.bgwin_state = FetcherState::TileNumber;
             // println!("RESET TO TILENUMBER STATE")
         }
     }
 
     pub fn push_to_fifo(&mut self) -> bool {
+        // println!("PUSHED PIXELS TO BGWIN FIFO");
         if self.bgwin_fifo.is_empty() {
             // println!("PUSHING TO FIFO");
             for pixel_number in 0..=7 {
                 let colour_high = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
                 let colour_low = ((self.tile_data_low & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
                 let colour = colour_high | colour_low;
+                
                 let pixel = BackgroundPixel::new(colour, 0xFF47);
 
                 self.bgwin_fifo.add(pixel);
+                //println!("BGWIN FIFO LEN => {}", self.bgwin_fifo.len);
             }
             // println!("FETCHERX => {}, FIRSTILE => {}", self.fetcher_x, self.first_tile);
             self.fetcher_x = self.fetcher_x.wrapping_add(1);
@@ -327,42 +337,52 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
         } else { false }
     }
 
-    pub fn sprite_fetch_tile_data_low(&mut self, memory: &mut Memory, ly: u8, tile_number: u8) {
-        let tile_address = 0x8000 + ((tile_number as u16).wrapping_mul(16));
+    pub fn sprite_fetch_tile_data_low(&mut self, memory: &mut Memory, ly: u8, sprite: &Sprite) {
+        let tile_address = 0x8000 + ((sprite.index as u16).wrapping_mul(16));
 
-        let scy = memory.read(0xFF42);
-        let offset = (2 * ((ly.wrapping_add(scy)) % 8)) as u16;
+        let height = if (memory.read(0xff40) & 0x4) == 0 { 8 } else { 16 };
+        let mut offset = ((ly as u16).wrapping_sub((sprite.y as u16).wrapping_sub(16)) % height).wrapping_mul(2) as u16;
+        let y_flip = (sprite.attributes >> 6) & 1;
+        offset = if y_flip == 1 { ((height - 1)*2) - offset } else { offset };
 
         let byte_address = tile_address.wrapping_add(offset);
 
         self.sprite_tile_data_low = memory.read(byte_address);
+        // println!("TILE ADDRESS => {:x} BYTE ADDRESS => {:x} @ {}", tile_address, byte_address, ly);
     }
 
-    pub fn sprite_fetch_tile_data_high(&mut self, memory: &mut Memory, ly: u8, tile_number: u8) {
-        let tile_address = 0x8000 + ((tile_number as u16).wrapping_mul(16));
+    pub fn sprite_fetch_tile_data_high(&mut self, memory: &mut Memory, ly: u8, sprite: &Sprite) {
+        let tile_address = 0x8000 + ((sprite.index as u16).wrapping_mul(16));
 
-        let scy = memory.read(0xFF42);
-        let offset = (2 * ((ly.wrapping_add(scy)) % 8)) as u16;
+        let height = if (memory.read(0xff40) & 0x4) == 0 { 8 } else { 16 };
+        let mut offset = ((ly as u16).wrapping_sub((sprite.y as u16).wrapping_sub(16)) % height).wrapping_mul(2) as u16;
+        let y_flip = (sprite.attributes >> 6) & 1;
+        offset = if y_flip == 1 { ((height - 1)*2) - offset } else { offset };
 
         let byte_address = tile_address.wrapping_add(offset);
 
         self.sprite_tile_data_high = memory.read(byte_address.wrapping_add(1));
     }
 
-    pub fn push_to_sprite_fifo(&mut self, sprite: Sprite) {
-        for pixel_number in 0..=7 {
-            let colour_high = ((self.tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
-            let colour_low = ((self.tile_data_low & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
-            let colour = colour_high | colour_low;
+    pub fn push_to_sprite_fifo(&mut self, sprite: &Sprite) {
+        let x_flip = (sprite.attributes >> 5) & 1;
+        // println!("SPRITE PIXELS PUSHED TO FIFO");
+        for mut pixel_number in self.sprite_fifo.len..=7 {
+            pixel_number = if x_flip == 1 { 7 - pixel_number } else { pixel_number };
+            let colour_high = ((self.sprite_tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
+            let colour_low = ((self.sprite_tile_data_low & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
+            let mut colour = colour_high | colour_low;
             let palette = match (sprite.attributes & 0b0001_0000) >> 4 {
                 0 => 0xFF48,
-                1 => 0xFF40,
+                1 => 0xFF49,
                 _ => unreachable!(),
             };
+
             let priority = (sprite.attributes & 0b1000_0000) >> 7;
             let pixel = SpritePixel::new(colour, palette, priority);
 
             self.sprite_fifo.add(pixel);
+            // println!("SPRITE FIFO LEN => {}", self.sprite_fifo.len);
         }
     }
 }
@@ -386,6 +406,8 @@ pub struct PPU {
     pub oam_pointer: usize,
     pub sprite_buffer: Vec<Sprite>,
     pub obj_checked_tiles: Vec<u8>,
+    pub fetching_sprite: bool,
+    pub sprite_to_render: Sprite,
 
     pub renderer: SDLRenderer,
     pub displaybuffer_index: usize,
@@ -411,6 +433,8 @@ impl PPU  {
             oam_pointer: 0,
             sprite_buffer: Vec::new(),
             obj_checked_tiles: Vec::new(),
+            fetching_sprite: false,
+            sprite_to_render: Sprite::new(0, 0, 0, 0),
 
             renderer: SDLRenderer::new(160, 144),
             displaybuffer_index: 0,
@@ -448,7 +472,14 @@ impl PPU  {
             0 => self.h_blank(memory),
             1 => self.v_blank(memory),
             2 => self.oam_scan(memory), 
-            3 => self.mode_3(memory),
+            3 => {
+                // println!("FETCHING SPRITE => {}", self.fetching_sprite);
+                if self.fetching_sprite {
+                    self.mode_3_sprite_fetch(memory);
+                } else { 
+                    self.mode_3_bgwin_fetch(memory); 
+                }
+            }
             _ => unreachable!(),
         }
     }
@@ -472,7 +503,7 @@ impl PPU  {
             // println!("RENDERING WINDOW");
             if !self.entered_window {
                 self.pixel_fetcher.fetcher_x = 0;
-                self.pixel_fetcher.state = FetcherState::TileNumber;
+                self.pixel_fetcher.bgwin_state = FetcherState::TileNumber;
                 self.pixel_fetcher.bgwin_fifo.clear();
                 self.entered_window = true;
             }
@@ -484,6 +515,7 @@ impl PPU  {
             self.rendering_window = false;
             self.pixel_fetcher.rendering_window = false;
             self.pixel_fetcher.window_line_counter = self.pixel_fetcher.window_line_counter.wrapping_add(1);
+            self.sprite_buffer.drain(..);
         }
         if self.cycles == 456 {
             if self.ly == 143 { 
@@ -539,33 +571,46 @@ impl PPU  {
         memory.write(0xFF41, (stat & !0b0000_0011) | self.mode);
     }
 
-    pub fn mode_3(&mut self, memory: &mut Memory) { // this needs redoing to work off t cycles
-        match self.pixel_fetcher.state {
+    pub fn fetching_sprite(&mut self) -> bool {
+        for sprite in &self.sprite_buffer {
+            // println!("{} | {}", self.x, sprite.x);
+            if sprite.x <= self.x + 8 {
+                // println!("FETCHING SPRITE IS TRUE");
+                self.pixel_fetcher.bgwin_state = FetcherState::TileNumber;
+                self.sprite_to_render = self.sprite_buffer.remove(0);
+                return true
+            }
+        }
+        false
+    }
+
+    pub fn mode_3_bgwin_fetch(&mut self, memory: &mut Memory) { // this needs redoing to work off t cycles
+        match self.pixel_fetcher.bgwin_state {
             FetcherState::TileNumber => {
                 if self.pixel_fetcher.cycles == 2 {
                     self.pixel_fetcher.fetch_tile_number(memory, self.ly);
-                    self.pixel_fetcher.state = FetcherState::TileDataLow;
+                    self.pixel_fetcher.bgwin_state = FetcherState::TileDataLow;
                     self.pixel_fetcher.cycles = 0;
                 }
             },
             FetcherState::TileDataLow => {
                 if self.pixel_fetcher.cycles == 2 {
                     self.pixel_fetcher.fetch_tile_data_low(memory, self.ly);
-                    self.pixel_fetcher.state = FetcherState::TileDataHigh;
+                    self.pixel_fetcher.bgwin_state = FetcherState::TileDataHigh;
                     self.pixel_fetcher.cycles = 0;
                 }
             },
             FetcherState::TileDataHigh => {
                 if self.pixel_fetcher.cycles == 2 {
                     self.pixel_fetcher.fetch_tile_data_high(memory, self.ly);
-                    self.pixel_fetcher.state = FetcherState::PushToFifo;
+                    self.pixel_fetcher.bgwin_state = FetcherState::PushToFifo;
                     self.pixel_fetcher.cycles = 0;
                 }
             },
             FetcherState::PushToFifo => { // returns "success" status - true if works. 
                 let success = self.pixel_fetcher.push_to_fifo();
                 if success {
-                    self.pixel_fetcher.state = FetcherState::TileNumber;
+                    self.pixel_fetcher.bgwin_state = FetcherState::TileNumber;
                     self.pixel_fetcher.cycles = 0;
                     // println!("INCREMENTED FETCHER X => {} X => {}", self.pixel_fetcher.fetcher_x, self.x);
                 }
@@ -582,6 +627,7 @@ impl PPU  {
             }
             self.push_to_lcd(memory);
             self.x = self.x.wrapping_add(1);
+            self.fetching_sprite = self.fetching_sprite();
         }
 
         if self.x == 160 {
@@ -591,21 +637,56 @@ impl PPU  {
             let stat = memory.read(0xFF41);
             if memory.read(0xFF41) & 0b0000_1000 != 0 && self.ly != memory.read(0xFF45) {
                 self.stat_irq = true;
-                println!("REQUESTED STAT IN MODE3");
+                // println!("REQUESTED STAT IN MODE3");
             }
             memory.write(0xFF41, (stat & !0b0000_0011) | self.mode);
         }
     }
 
+    pub fn mode_3_sprite_fetch(&mut self, memory: &mut Memory) {
+        match self.pixel_fetcher.sprite_state {
+            FetcherState::TileNumber => {
+                // Does nothing, tile number is read from sprite buffer
+                if self.pixel_fetcher.cycles == 2 {
+                    self.pixel_fetcher.cycles = 0;
+                    self.pixel_fetcher.sprite_state = FetcherState::TileDataLow;
+                }
+            },
+            FetcherState::TileDataLow => {
+                if self.pixel_fetcher.cycles == 2 {
+                    self.pixel_fetcher.sprite_fetch_tile_data_low(memory, self.ly, &self.sprite_to_render);
+                    self.pixel_fetcher.cycles = 0;
+                    self.pixel_fetcher.sprite_state = FetcherState::TileDataHigh;
+                }
+            },
+            FetcherState::TileDataHigh => {
+                if self.pixel_fetcher.cycles == 2 {
+                    self.pixel_fetcher.sprite_fetch_tile_data_high(memory, self.ly, &self.sprite_to_render);
+                    self.pixel_fetcher.cycles = 0;
+                    self.pixel_fetcher.sprite_state = FetcherState::PushToFifo;
+                }
+            },
+            FetcherState::PushToFifo => {
+                self.pixel_fetcher.push_to_sprite_fifo(&self.sprite_to_render);
+                self.pixel_fetcher.sprite_state = FetcherState::TileNumber;
+                self.fetching_sprite = false;
+                self.pixel_fetcher.cycles = 0;
+            }
+        }
+    }
+
     pub fn oam_scan(&mut self, memory: &mut Memory) { // pushes a single sprite to oam buffer.
         // THIS ALL NEEDS TO BE CHECKED. CHECKED. CHECKKKEEEDDDDDD. HIGH RISK OF INCORRECT LOGIC.
-        if self.sprite_buffer.len() == 10 {
-            return
-        }
 
         if self.cycles == 80 { 
+            // println!("ENTERED MODE 3");
+            /* println!("SPRITE INDEXES @ {}: ", self.ly);
+            for sprite in &self.sprite_buffer {
+                print!("{:x} | ", sprite.index);
+            }
+            println!("");*/
             self.mode = 3;
-            self.pixel_fetcher.state = FetcherState::TileNumber;
+            self.pixel_fetcher.bgwin_state = FetcherState::TileNumber;
             let stat = memory.read(0xFF41);
             memory.write(0xFF41, (stat & !0b0000_0011) | self.mode);
             // self.cycles = 0;
@@ -613,24 +694,33 @@ impl PPU  {
             self.pixel_fetcher.first_tile = true;
             self.pixel_fetcher.bgwin_fifo.clear(); 
             self.pixel_fetcher.sprite_fifo.clear(); 
+            self.oam_pointer = 0;
+
+            self.sprite_buffer.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+            return
         }; 
+
+        if self.sprite_buffer.len() == 10 {
+            return
+        };
 
         while self.oam_pointer < 40 {
             let height = if (memory.read(0xff40) & 0x4) == 0 { 8 } else { 16 };
             let y = memory.oam[self.oam_pointer * 4];   
             let x = memory.oam[(self.oam_pointer * 4).wrapping_add(1)];
 
-            if ((y + height > self.ly.wrapping_add(16)) && (y <= self.ly.wrapping_add(16)) && (x > 0)) { 
-                let index = memory.oam[(self.oam_pointer * 4).wrapping_add(2)];    
+            if ((y.wrapping_add(height) > self.ly.wrapping_add(16)) && (y <= self.ly.wrapping_add(16)) && (x > 0)) { 
+                let mut index = memory.oam[(self.oam_pointer * 4).wrapping_add(2)];    
                 let attributes = memory.oam[(self.oam_pointer * 4).wrapping_add(3)];
-        
+
+                index = if height == 16 { index & !1 } else { index };
                 let sprite = Sprite::new(y, x, index, attributes);
+                // println!("PUSHED SPRITE TO SPRITE BUFFER @ {} INDEX => {:x}", self.ly, sprite.index);
                 self.sprite_buffer.push(sprite);   
                 self.oam_pointer += 1;
 
                 let obj_penalty_sum = 6;
                 self.obj_penalty = obj_penalty_sum;
-
                 return
             }
             self.oam_pointer += 1;
@@ -639,41 +729,60 @@ impl PPU  {
 
 ////////////////////////////////////////////////////////////////////
 
-    pub fn push_to_lcd(&mut self, memory: &mut Memory) { // each pixel pushed takes 1 dot
-        let lcdc = memory.read(0xFF40); // this may very well be wrong, i need to think on how to do this.
-                                        // probably draw a diagram...
-        let mut rgb = 255;
+    pub fn push_to_lcd(&mut self, memory: &mut Memory) {
+        let lcdc = memory.read(0xFF40);
+        let rgb = if !self.pixel_fetcher.sprite_fifo.is_empty() && !self.pixel_fetcher.bgwin_fifo.is_empty() { // mix
+            // println!("SPRITE FIFO HAS DATA @ ({}, {})", self.x, self.ly);
+            let mut bg_pixel = self.pixel_fetcher.bgwin_fifo.remove().unwrap();
+            let mut sprite_pixel = self.pixel_fetcher.sprite_fifo.remove().unwrap();
+            bg_pixel.colour_id = if lcdc & 0b0000_0001 == 0 { 0 } else { bg_pixel.colour_id };
+            sprite_pixel.colour_id = if lcdc & 0b0000_0010 == 0 { 0 } else { sprite_pixel.colour_id };
+            // println!("LCDC => {:#010b} @ ({}, {})", lcdc, self.x, self.ly);
+            // println!("COLOUR => {} | PALETTE => {} | PRIORITY => {}", sprite_pixel.colour_id, sprite_pixel.palette, sprite_pixel.priority);
 
-        let pixel = self.pixel_fetcher.bgwin_fifo.remove().unwrap(); // pixel.colour tells us the id 
-        let palette = memory.read(pixel.palette); // aka which 2 bits of the palette to use
-        let colour = (palette & (0b00000011 << (pixel.colour_id * 2))) >> (pixel.colour_id * 2);
-        let rgb = match colour {
-            0 => 255,
-            1 => 169,
-            2 => 84,
-            3 => 0,
-            _ => unreachable!(),
+            if sprite_pixel.colour_id == 0 || (sprite_pixel.priority == 1 && bg_pixel.colour_id != 0) {
+                let palette = memory.read(bg_pixel.palette); // aka which 2 bits of the palette to use
+                let colour = (palette & (0b00000011 << (bg_pixel.colour_id * 2))) >> (bg_pixel.colour_id * 2);
+                match colour {
+                    0 => 255,
+                    1 => 169,
+                    2 => 84,
+                    3 => 0,
+                    _ => unreachable!(),
+                }
+            } else {
+                // println!("RENDERING SPRITE PIXEL @ ({},{})", self.x, self.ly);
+                let palette = memory.read(sprite_pixel.palette); // aka which 2 bits of the palette to use
+                let colour = (palette & (0b00000011 << (sprite_pixel.colour_id * 2))) >> (sprite_pixel.colour_id * 2);
+                match colour {
+                    0 => 255,
+                    1 => 169,
+                    2 => 84,
+                    3 => 0,
+                    _ => unreachable!(),
+                }
+            }
+        } else { // only bother with bg
+            let mut bg_pixel = self.pixel_fetcher.bgwin_fifo.remove().unwrap(); // pixel.colour tells us the id 
+            bg_pixel.colour_id = if lcdc & 0b0000_0001 == 0 { 0 } else { bg_pixel.colour_id };
+            let palette = memory.read(bg_pixel.palette); // aka which 2 bits of the palette to use
+            let colour = (palette & (0b00000011 << (bg_pixel.colour_id * 2))) >> (bg_pixel.colour_id * 2);
+            match colour {
+                0 => 255,
+                1 => 169,
+                2 => 84,
+                3 => 0,
+                _ => unreachable!(),
+            }
         };
 
-        // println!("PIXEL_PUSHED: {}", rgb);
-
-        // println!("DISPLAYBUFFER_INDEX: {}", self.displaybuffer_index);
         self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(1);
         self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
-        /* if self.x == 0 || self.x == 8 {
-            self.renderer.displaybuffer[self.displaybuffer_index] = 0;
-            // println!("TILE NUMBER => {} SCY => {} SCX => {} LY => {} FetcherX => {}", self.pixel_fetcher.tile_number, memory.read(0xFF42), memory.read(0xFF43), self.ly, self.pixel_fetcher.fetcher_x);
-        }*/
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(1);
         self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(2);
 
         self.rendering_window(memory);
-    }
-
-    pub fn get_current_tile(&mut self, memory: &mut Memory, sprite: Sprite) {
-        let scy = memory.read(0xFF42);
-        let scx = memory.read(0xFF43);
     }
 }
