@@ -523,6 +523,7 @@ impl PPU  {
             } else { 
                 self.mode = 2;
                 self.pixel_fetcher.bgwin_fifo.clear();
+                self.sprite_buffer.clear();
                 // println!("NEW SCANLINE");
                 let stat = memory.read(0xFF41);
                 if stat & 0b0010_0000 != 0 && self.ly != memory.read(0xFF45) {
@@ -680,7 +681,7 @@ impl PPU  {
 
         if self.cycles == 80 { 
             // println!("ENTERED MODE 3");
-            /* println!("SPRITE INDEXES @ {}: ", self.ly);
+            /* println!("SPRITE INDEXES @ {:x}: ", self.ly);
             for sprite in &self.sprite_buffer {
                 print!("{:x} | ", sprite.index);
             }
@@ -709,7 +710,7 @@ impl PPU  {
             let y = memory.oam[self.oam_pointer * 4];   
             let x = memory.oam[(self.oam_pointer * 4).wrapping_add(1)];
 
-            if ((y.wrapping_add(height) > self.ly.wrapping_add(16)) && (y <= self.ly.wrapping_add(16)) && (x > 0)) { 
+            if ((y.wrapping_add(height) > self.ly.wrapping_add(16)) && (y <= self.ly.wrapping_add(16))) { // MAY NEED TO RANGE CHECK X... THOUGH HARDWARE DOES NOT 
                 let mut index = memory.oam[(self.oam_pointer * 4).wrapping_add(2)];    
                 let attributes = memory.oam[(self.oam_pointer * 4).wrapping_add(3)];
 

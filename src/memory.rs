@@ -106,9 +106,9 @@ impl Memory{
                 print!("{}", (data as u8) as char)
             } else { self.io_registers[address as usize - 0xFF00] = data; } },
             0xFF46 => { self.dma_transfer(data); },
-            0xFF00..=0xFF7F => { self.io_registers[address as usize - 0xFF00] = data; },
+            0xFF00..=0xFF7F => { self.io_registers[address as usize - 0xFF00] = data; /*if address == 0xFF41 && (data & 0b0000_0100) == 0 { println!("STAT => {:#010b}", data); }*/ },
             0xFF80..=0xFFFE => { self.hram[address as usize - 0xFF80] = data },
-            0xFFFF => { println!("IE WRITTEN TO => {}", data); self.ie_register[0] = data },
+            0xFFFF => { println!("IE WRITTEN TO => {:#010b}", data); self.ie_register[0] = data },
             _ => { println!("INVALID ADDRESS WRITE @ {:x}", address); }
         };
     }
@@ -136,6 +136,7 @@ impl Memory{
     }
 
     pub fn dma_transfer(&mut self, address: u8) {
+        // println!("INIT DMA FROM => {:x}", address);
         let val = match address {
             0xFE => { (0xDE as u16).wrapping_mul(0x100) },
             0xFF => { (0xDF as u16).wrapping_mul(0x100) },

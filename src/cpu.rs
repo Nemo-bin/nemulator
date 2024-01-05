@@ -126,6 +126,9 @@ pub struct InputStates {
     pub select: bool,
     pub b: bool, 
     pub a: bool,
+
+    pub input_irq: bool,
+    pub last_states: u8,
 }
 
 impl InputStates {
@@ -140,15 +143,34 @@ impl InputStates {
             select: false,
             b: false,
             a: false,
+
+            input_irq: false,
+            last_states: 0xFF,
         }
     }
 
-    pub fn get_states(&mut self, joyp: u8) -> u8 {
+    pub fn get_states(&mut self, joyp: u8) -> u8 { // joyp = p1 before, !states = p1 after, check for bit high to low and send off irq on change
         if joyp & 0b0010_0000 != 0 && joyp & 0b0001_0000 == 0 { // Dpad selected
             let states = 0b0001_0000 | (self.down as u8) << 3 | (self.up as u8) << 2 | (self.left as u8) << 1 | (self.right as u8); 
+           /* for bit in 0..=3 {
+                if (states >> bit) & 1 > (self.last_states >> bit) & 1 {
+                    self.input_irq = true;
+                    println!("{:#010b}, {:#010b}", !states, self.last_states);
+                    break;
+                }
+            }*/
+            self.last_states = !states;
             !states
         } else if joyp & 0b0010_0000 == 0 && joyp & 0b0001_0000 != 0 {
             let states = 0b0010_0000 | (self.start as u8) << 3 | (self.select as u8) << 2 | (self.b as u8) << 1 | (self.a as u8); 
+            /*for bit in 0..=3 {
+                if (!states >> bit) & 1 > (self.last_states >> bit) & 1 {
+                    self.input_irq = true;
+                    println!("{:#010b}, {:#010b}", !states, self.last_states);
+                    break;
+                }
+            }*/
+            self.last_states = !states;
             !states
         } else { 0xFF }
     }
@@ -250,6 +272,8 @@ const KIB:usize = 1024;
 
 pub struct CPU {
     pub halted: bool,
+    pub halt_bug_with_enter: bool,
+    pub halt_bug_without_enter: bool,
     pub ime: bool,
     ime_waiting: bool,
     pub registers: Registers,
@@ -272,6 +296,8 @@ impl CPU {
     pub fn new() -> Self {
         CPU {
             halted: false,
+            halt_bug_with_enter: false,
+            halt_bug_without_enter: false,
             ime: false,
             ime_waiting: false,
             registers: Registers::new(),
@@ -325,6 +351,15 @@ impl CPU {
         }
     }
 
+    pub fn set_input_flag(&mut self) {
+        if self.input_states.input_irq {
+            self.input_states.input_irq = false;
+            let interrupt_flags = self.memory.read(0xFF0F);
+            self.memory.write(0xFF0F, interrupt_flags | 0b0001_0000);
+            // println!("INPUT FLAG SET - {:x}", self.memory.read(0xFF0F));
+        }
+    }
+
     pub fn set_interrupt_queue_bitflag(&mut self, int: Interrupt) {
         self.interrupt_queue_bitflags |= match int {
             Interrupt::VBlank => 1,
@@ -359,6 +394,7 @@ impl CPU {
         self.set_vblank_flag();
         self.set_tima_flag();
         self.set_stat_flag();
+        self.set_input_flag();
         let interrupt_enable = self.memory.read(0xFFFF);
         let interrupt_flags = self.memory.read(0xFF0F);
         for flag in 0..5 {
@@ -392,8 +428,11 @@ impl CPU {
                     Interrupt::Joypad => 16,
                 };
                 if self.ime && ((interrupt_flag & interrupt_enable) != 0) { // tries it
-                    self.handle_interrupt(interrupt); // if allowed, do it
-                    self.memory.write(0xFF0F, interrupt_flags & !interrupt_flag);
+                    if !self.halt_bug_with_enter { // If the halt bug has occured, dont handle the interrupt
+                        self.handle_interrupt(interrupt); // if allowed, do it
+                        self.memory.write(0xFF0F, interrupt_flags & !interrupt_flag);
+                        self.halt_bug_with_enter = false;
+                    }
                 } else { ephemeral_buffer.push(interrupt); } // if not allowed, push it into buffer
             }
             for interrupt in ephemeral_buffer.iter() {
@@ -421,7 +460,9 @@ impl CPU {
     pub fn fetch(&mut self) -> u8 {
         let addr = self.pc;
         let data = self.read(addr);
-        self.pc = self.pc.wrapping_add(1);
+        if !self.halt_bug_without_enter {
+            self.pc = self.pc.wrapping_add(1);
+        } else { self.halt_bug_without_enter = false; }
         self.m_cycle();
         data
     }
@@ -606,7 +647,7 @@ impl CPU {
                 0x73 => { self.regWaddr_ld_reg(RegW::HL, Reg::E); },
                 0x74 => { self.regWaddr_ld_reg(RegW::HL, Reg::H); },
                 0x75 => { self.regWaddr_ld_reg(RegW::HL, Reg::L); },
-                0x76 => { self.halted = true; },
+                0x76 => { self.halt(); },
                 0x77 => { self.regWaddr_ld_reg(RegW::HL, Reg::A); },
                 0x78 => { self.reg_ld_reg(Reg::A, Reg::B); },
                 0x79 => { self.reg_ld_reg(Reg::A, Reg::C); },
@@ -810,6 +851,18 @@ impl CPU {
     }
 
     // izik1.github.io/gbops/index.html
+    // HALT
+    pub fn halt(&mut self) {
+        self.halted = true;
+        if self.ime == false {
+            if (self.memory.read(0xFFFF) & self.memory.read(0xFF0F)) != 0 {
+                self.halted = false;
+                self.halt_bug_without_enter = true;
+            } else {
+                self.halt_bug_with_enter = true;
+            }
+        }
+    }
     // LD
     // Load a register with another register
     pub fn reg_ld_reg(&mut self, dst: Reg, src: Reg) {
