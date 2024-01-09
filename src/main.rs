@@ -1,8 +1,9 @@
-mod cpu;
-mod memory;
-mod registers;
-mod ppu;
-mod timer;
+pub mod cpu;
+pub mod memory;
+pub mod registers;
+pub mod ppu;
+pub mod timer;
+pub mod apu;
 
 use std::{
     io,
@@ -11,8 +12,8 @@ use std::{
     thread,
     time::Duration,
 };
-use fs::File;
-use io::Read;
+use fs::{File, OpenOptions};
+use io::{Read, Write, BufReader, BufRead};
 
 use sdl2::keyboard::Keycode;
 use sdl2::event::Event;
@@ -33,6 +34,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use postgres::{Client, NoTls};
+use postgres::types::Type;
 
 use cpu::CPU;
 use registers::Reg;
@@ -49,6 +52,7 @@ macro_rules! box_arr {
     };
 }
 
+//////////////////////////////// CARTRIDGE DATA ////////////////////////////////
 struct RomList {
     items: Vec<String>,
     state: ListState,
@@ -404,7 +408,126 @@ pub fn match_new_licensee_code(code: &str) -> String {
     licensee.to_string()
 }
 
+struct User {
+    uuid: i32,
+    username: String,
+}
+
+impl User {
+    pub fn new(uuid: i32, username: String) -> Self {
+        User {
+            uuid,
+            username,
+        }
+    }
+}
+
+fn select_menu(client: &mut Client) -> User {
+    let mut user = User::new(0, String::new());
+    let mut success = false;
+    while !success {
+        println!("SELECT: 1 - Login | 2 - Sign Up");
+        let mut selection = String::new();
+        std::io::stdin().read_line(&mut selection).unwrap();
+        match selection.as_str().trim_end() {
+            "1" => { user = login(client); success = true; },
+            "2" => { user = signup(client); success = true; },
+            _ => { println!("Invalid selection: {}, please select 1, 2 or 3", selection); }
+        }
+    }
+    return user;
+}
+
+fn login(client: &mut Client) -> User {
+    let mut user = User::new(0, String::new());
+    let mut success = false;
+    while !success {
+        println!("================= LOGIN SELECTED =================");
+        println!("ENTER USERNAME:");
+        let mut username = String::new();
+        std::io::stdin().read_line(&mut username).unwrap();
+        username = username.trim().to_string();
+        println!("ENTER PASSWORD:");
+        let mut password = String::new();
+        std::io::stdin().read_line(&mut password).unwrap();
+        password = password.trim().to_string();
+
+        let login = client.query(
+            "SELECT uuid, username FROM users WHERE username = $1 AND password = $2",
+            &[&username, &password],
+        );
+        match login {
+            Ok(v) => { 
+                if v.len() == 1 {
+                    user = User::new(v[0].get(0), v[0].get(1));
+                    success = true;
+                } else { println!("INCORRECT USERNAME OR PASSWORD") };
+            }
+            Err(e) => {
+                println!("ERROR FETCHING ACCOUNT DETAILS");
+            }
+        }
+    }
+    return user;
+}
+
+fn signup(client: &mut Client) -> User {
+    let mut user = User::new(0, String::new());
+    let mut success = false;
+    while !success {
+        println!("================= SIGNUP SELECTED =================");
+        println!("ENTER DESIRED USERNAME:");
+        let mut username = String::new();
+        std::io::stdin().read_line(&mut username).unwrap();
+        username = username.trim().to_string();
+        println!("ENTER DESIRED PASSWORD:");
+        let mut password = String::new();
+        std::io::stdin().read_line(&mut password).unwrap();
+        password = password.trim().to_string();
+        println!("CONFIRM DESIRED PASSWORD:");
+        let mut confirm_password = String::new();
+        std::io::stdin().read_line(&mut confirm_password).unwrap();
+        confirm_password = confirm_password.trim().to_string();
+    
+        let usernames = client.query(
+            "SELECT username FROM users WHERE username = $1",
+            &[&username]
+        );
+        match usernames {
+            Ok(v) => { 
+                if v.len() == 0 {
+                    if password == confirm_password {
+                        client.execute(
+                            "INSERT INTO users (username, password)
+                            VALUES ($1, $2)",
+                            &[&username, &password],
+                        );
+                        let uuid_result = client.query(
+                            "SELECT uuid FROM users WHERE username = $1 AND password = $2",
+                            &[&username, &password],
+                        );
+                        match uuid_result {
+                            Ok(v) => {
+                                user = User::new(v[0].get(0), username);
+                                success = true;
+                            },
+                            Err(e) => {
+                                println!("ERROR FETCHING ACCOUNT DATA");
+                            }
+                        }
+                    } else { println!("PASSWORDS DID NOT MATCH"); }
+                } else { println!("USERNAME ALREADY EXISTS"); } },
+            Err(e) => { println!("ERROR CREATING ACCOUNT"); } 
+        }
+    }
+    return user;
+}
+
 fn main() -> Result<(), io::Error> {
+    //////////////////////////////////// DATABASE ////////////////////////////////////
+    let mut client = Client::connect("postgresql://postgres:AceBen13@localhost/nemulator", NoTls).unwrap();
+
+    let user = select_menu(&mut client);
 
     /////////////////////////////// BACKTRACE ///////////////////////////////
 
@@ -435,8 +558,11 @@ fn main() -> Result<(), io::Error> {
     let mut filename = &args[1];
     if args.len() == 3 {
         let blargg_log_number = format!("blarggs_logs/{}", &args[2]);
-    }*/
+    }
+    let blargg_log_number = format!("blarggs_logs/Blargg2.txt");*/
     /////////////////////////////////// TUI ///////////////////////////////////
+
+    let mut emu_running = false;
 
     enable_raw_mode().expect("User input enabled");
     let mut stdout = io::stdout();
@@ -609,6 +735,7 @@ fn main() -> Result<(), io::Error> {
                         DisableMouseCapture
                     )?;
                     terminal.show_cursor()?;
+                    emu_running = true;
                     break 'running;
                 }
                 _ => {},
@@ -624,8 +751,7 @@ fn main() -> Result<(), io::Error> {
     cpu.memory.load_rom(filename);
     println!("LOADED ROM");
 
-    /*
-    fs::remove_file("logfiles/logfile.log").expect("removal failed");
+    /*fs::remove_file("logfiles/logfile.log").expect("removal failed");
     let mut logfile = File::create("logfiles/logfile.log").expect("creation failed");  
 
     let mut logfile = OpenOptions::new()
@@ -641,16 +767,14 @@ fn main() -> Result<(), io::Error> {
         .map(|line| line.expect("Something went wrong"))
         .collect();
 
-    let mut line_index:usize = 0;
-    */
+    let mut line_index:usize = 0;*/
 
-    let mut running = true;
-    while running {
+    while emu_running {
         /* if cpu.memory.read(0xff02) == 0x81 {
             println!("{:x}", cpu.memory.read(0xff01));
         }*/
 
-        let log_line = format!(
+        /*let log_line = format!(
                 "A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: 00:{:04X} ({:02X} {:02X} {:02X} {:02X})\n",
                 cpu.registers.get_reg(Reg::A),
                 cpu.registers.get_reg(Reg::F),
@@ -665,11 +789,12 @@ fn main() -> Result<(), io::Error> {
                 cpu.memory.read(cpu.pc),
                 cpu.memory.read(cpu.pc + 1),
                 cpu.memory.read(cpu.pc + 2),
-                cpu.memory.read(cpu.pc + 3)
+                cpu.memory.read(cpu.pc + 3),
             );
 
-        /*if cpu.pc > 100 {
+        if cpu.pc > 100 {
             if (log_line.trim() != blargg_log_lines[line_index].trim()) {
+                logfile.write(log_line.as_bytes());
                 println!("{}", log_line);
                 println!("{}", blargg_log_lines[line_index]);
                 println!("Opcode {:x} is potentially erroneous", cpu.memory.read(cpu.pc.wrapping_sub(1)));
@@ -679,11 +804,9 @@ fn main() -> Result<(), io::Error> {
             line_index += 1;
         }*/
 
-        //vprintln!("{}", log_line);
-
         for event in cpu.ppu.renderer.event_pump.poll_iter() {
             match event {
-                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { running = false; },
+                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { emu_running = false; },
                 Event::KeyDown { keycode: Some(Keycode::T), .. } => { 
                     let mut vram_pointer = 0x9800;
                     while vram_pointer <= 0x9FFF {
@@ -711,6 +834,9 @@ fn main() -> Result<(), io::Error> {
                         print!("{:x} / ", cpu.memory.read(oam_pointer));
                         oam_pointer += 1;
                     }
+                },
+                Event::KeyDown { keycode: Some(Keycode::I), ..} => {
+                    // println!("{}", log_line);
                 },
                 // Keybinds: (potentially temporary) WASD => DPad, Q => A, E => B, R => Start, F => Select
                 // Ordered as they are in JOYP

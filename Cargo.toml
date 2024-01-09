@@ -9,6 +9,8 @@ edition = "2021"
 backtrace = "0.3"
 tui = "0.19"
 crossterm = "0.25"
+postgres = "0.19.7"
+dotenv = "0.15.0"
 
 [dependencies.sdl2]
 version = "0.32"

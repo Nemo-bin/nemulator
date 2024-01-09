@@ -2,6 +2,7 @@ use crate::memory::Memory;
 use crate::registers::*;
 use crate::ppu::*;
 use crate::timer::*;
+use crate::apu::*;
 
 use std::borrow::BorrowMut;
 use std::{thread, time};
@@ -317,6 +318,11 @@ impl CPU {
     }
 
     pub fn m_cycle(&mut self) {
+        if self.ime_waiting {
+            self.ime = true;
+            self.ime_waiting = false;
+        }
+
         self.t_cycles = self.t_cycles.wrapping_add(4);
         let memory_ref = &mut self.memory;
         self.ppu.tick(memory_ref);
@@ -522,10 +528,6 @@ impl CPU {
 
     pub fn execute(&mut self, mut opcode:u8) {
         // println!("EXECUTING OPCODE => {:x} @ PC => {}", opcode, self.pc);
-        if self.ime_waiting && opcode != 0xFB {
-            self.ime = true;
-            self.ime_waiting = false;
-        }
 
         if opcode != 0xCB {
             match opcode { // replace with function pointer array
