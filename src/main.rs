@@ -530,7 +530,7 @@ fn signup(client: &mut Client) -> User {
 
 fn main() -> Result<(), io::Error> {
     //////////////////////////////////// DATABASE ////////////////////////////////////
-    let mut client = Client::connect("postgresql://postgres:AceBen13@localhost/nemulator", NoTls).unwrap();
+    let mut client = Client::connect("postgresql://postgres:PASSWORD@localhost/nemulator", NoTls).unwrap();
 
     let mut user = select_menu(&mut client);
 
