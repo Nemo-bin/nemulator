@@ -338,8 +338,16 @@ impl CPU {
         }
 
         self.t_cycles = self.t_cycles.wrapping_add(4);
-        let memory_ref = &mut self.memory;
-        self.ppu.tick(memory_ref);
+        if !self.ppu.enabled {
+            let lcdc = self.memory.read(0xFF40);
+            if lcdc & 0b1000_0000 == 0b1000_0000 {
+                self.ppu.enabled = true;
+            }
+        }
+        if self.ppu.enabled {
+            let memory_ref = &mut self.memory;
+            self.ppu.tick(memory_ref);
+        }
         self.timer.inc_sysclk();
         // thread::sleep(time::Duration::from_nanos(1));
     }
@@ -483,7 +491,7 @@ impl CPU {
         if !self.halt_bug_without_enter {
             self.pc = self.pc.wrapping_add(1);
         } else { self.halt_bug_without_enter = false; }
-        self.m_cycle();
+        // self.m_cycle();
         data
     }
 

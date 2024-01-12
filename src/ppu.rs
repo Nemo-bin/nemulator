@@ -390,6 +390,7 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
 /////////////////////////////// PPU ////////////////////////////////
 
 pub struct PPU {
+    pub enabled: bool,
     pub mode: u8,
     pub cycles: u16,
     pub ly: u8,
@@ -417,6 +418,7 @@ pub struct PPU {
 impl PPU  {
     pub fn new() -> Self {
         PPU {
+            enabled: true,
             mode: 2,
             cycles: 0,
             ly: 0,
@@ -557,6 +559,15 @@ impl PPU  {
         if self.cycles == 456 {
             self.inc_ly(memory);
             self.cycles = 0;
+        }
+        let lcdc = memory.read(0xFF40);
+        if lcdc & 0b1000_0000 != 0b1000_0000 {
+            self.enabled = false;
+            self.ly = 0;
+            memory.write(0xFF44, 0);
+            let stat = memory.read(0xFF41);
+            memory.write(0xFF41, stat & !0b0000_0011);
+            self.renderer.displaybuffer.fill(0);
         }
     }
 
