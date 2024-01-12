@@ -11,6 +11,7 @@ use std::{
     env,
     thread,
     time::Duration,
+    collections::HashMap,
 };
 use fs::{File, OpenOptions};
 use io::{Read, Write, BufReader, BufRead};
@@ -411,6 +412,8 @@ pub fn match_new_licensee_code(code: &str) -> String {
 struct User {
     uuid: i32,
     username: String,
+    playing: i32,
+    score: i32,
 }
 
 impl User {
@@ -418,6 +421,8 @@ impl User {
         User {
             uuid,
             username,
+            playing: 1,
+            score: 0,
         }
     }
 }
@@ -527,7 +532,7 @@ fn main() -> Result<(), io::Error> {
     //////////////////////////////////// DATABASE ////////////////////////////////////
     let mut client = Client::connect("postgresql://postgres:Password@localhost/nemulator", NoTls).unwrap();
 
-    let user = select_menu(&mut client);
+    let mut user = select_menu(&mut client);
 
     /////////////////////////////// BACKTRACE ///////////////////////////////
 
@@ -589,8 +594,9 @@ fn main() -> Result<(), io::Error> {
 
     let mut filename = &String::from("TEMP");
 
-    'running:loop {
+    let mut score_map: HashMap<String, String> = HashMap::new();
 
+    'running:loop {
         // FILES
 
         let entries = fs::read_dir("./").unwrap();
@@ -609,14 +615,42 @@ fn main() -> Result<(), io::Error> {
         filename = &stateful_rom_list.items[stateful_rom_list.state.selected().unwrap()];
         let cartridge_header = &get_cartridge_header(filename);
 
-        let title = "Title: ".to_string() + &get_title(cartridge_header);
+        let raw_title = get_title(cartridge_header);
+        let title = "Title: ".to_string() + &raw_title;
         let licensee = "Licensee: ".to_string() + &get_licensee(cartridge_header);
         let destination = "Destination: ".to_string() + &get_destination(cartridge_header);
         let cartridge_type = "Type: ".to_string() + &get_cartridge_type(cartridge_header);
         let rom_size = "Cart. ROM: ".to_string() + &get_rom_size(cartridge_header);
         let ram_size = "Cart. RAM: ".to_string() + &get_ram_size(cartridge_header);
+        let score = "Highscore: ".to_string() + match score_map.get(raw_title.as_str()) {
+            Some(v) => { &v },
+            None => { "None" }
+        };
 
-        let rom_metadata = vec![title, licensee, destination, cartridge_type, rom_size, ram_size];
+        let rom_metadata = vec![&title, &licensee, &destination, &cartridge_type, &rom_size, &ram_size, &score];
+
+        if !score_map.contains_key(raw_title.as_str()) {
+            let score_result = client.query("SELECT score FROM scores WHERE scores.uuid = $1 AND scores.guid = 
+                                                (SELECT guid FROM games WHERE name = $2)",
+                                            &[&user.uuid, &raw_title]);
+
+            let score = match score_result {
+                Ok(v) => {
+                    if v.len() > 0 {
+                        let result = v[0].get::<usize, i32>(0).to_string();
+                        score_map.insert(raw_title, result);
+                    } else {
+                        score_map.insert(raw_title, "None".to_string());
+                    }
+                },
+                Err(e) => {
+                    println!("Error fetching score data");
+                    "Error".to_string();
+                },
+            };
+        }
+
+        // Fetch scores from database, cache them into scoremap
 
         terminal.draw(|f| {
             let size = f.size();
@@ -736,6 +770,21 @@ fn main() -> Result<(), io::Error> {
                     )?;
                     terminal.show_cursor()?;
                     emu_running = true;
+                    let selected_title = &get_title(cartridge_header);
+                    let guid_result = client.query(
+                        "SELECT guid FROM games WHERE name = $1",
+                        &[&selected_title],
+                    );
+                    match guid_result {
+                        Ok(v) => {
+                            if v.len() > 0 {
+                                user.playing = v[0].get(0);
+                            } else { println!("GAME {} IS NOT SUPPORTED", selected_title); }
+                        },
+                        Err(e) => {
+                            println!("ERROR FETCHING GAME DATA");
+                        }
+                    };
                     break 'running;
                 }
                 _ => {},
@@ -804,9 +853,36 @@ fn main() -> Result<(), io::Error> {
             line_index += 1;
         }*/
 
+        let score = cpu.get_game_score(user.playing);
+        if score >= user.score { user.score = score };
+
         for event in cpu.ppu.renderer.event_pump.poll_iter() {
             match event {
-                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { emu_running = false; },
+                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => { 
+                    if user.playing !=  1 {
+                        println!("UUID: {} GUID: {} SCORE: {}", user.uuid, user.playing, user.score);
+                        let score_result = client.query("SELECT score FROM scores WHERE uuid = $1 AND guid = $2",
+                                    &[&user.uuid, &user.playing]);
+                        match score_result {
+                            Ok(v) => {
+                                if v.len() > 0 {
+                                    let old_score = v[0].get(0);
+                                    if user.score > old_score {
+                                        println!("Updating old score");
+                                        client.execute("UPDATE scores SET score = $1 WHERE uuid = $2 AND guid = $2",
+                                        &[&user.score, &user.uuid, &user.playing]);
+                                    }
+                                } else {
+                                    println!("Inserting new score");
+                                    client.execute("INSERT INTO scores (uuid, guid, score) VALUES ($1, $2, $3)",
+                                    &[&user.uuid, &user.playing, &user.score]);
+                                }
+                            },
+                            Err(e) => { println!("ERROR FETCHING SCORE DATA"); }
+                        }                
+                    }
+                    emu_running = false;
+                },
                 Event::KeyDown { keycode: Some(Keycode::T), .. } => { 
                     let mut vram_pointer = 0x9800;
                     while vram_pointer <= 0x9FFF {

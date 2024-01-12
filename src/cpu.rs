@@ -317,6 +317,20 @@ impl CPU {
         }
     }
 
+    pub fn get_game_score(&mut self, guid: i32) -> i32 {
+        let score = match guid {
+            1 => { 0 }, // Not supported
+            2 | 3=> { // Tetris AND Dr Mario -> Score in same place
+                let top = self.memory.read(0xC0A0); //.to_string();
+                let middle = self.memory.read(0xC0A1); //.to_string();
+                let bottom = self.memory.read(0xC0A2); // .to_string();
+                (format!("{:x}", bottom) + &format!("{:x}", middle) + &format!("{:x}", top)).parse().unwrap()
+            },
+            _ => { unreachable!() },
+        };
+        score
+    }
+
     pub fn m_cycle(&mut self) {
         if self.ime_waiting {
             self.ime = true;
