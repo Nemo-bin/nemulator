@@ -66,7 +66,7 @@ impl Timer {
                 self.tima = self.tma;
                 self.tima_reload_cycle = true;
             }
-        } // upon overflow, there is a 1 cycle delay till the irq is made
+        } // upon overflow, there is a 1 m-cycle delay till the irq is made
 
         self.sysclk_change(self.sysclk.wrapping_add(4)); // 4 t-cycles as my cpu stores t-cycles but incs at each M 
     }

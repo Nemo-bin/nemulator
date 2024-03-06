@@ -16,6 +16,7 @@ use sdl2::{
 };
 
 use std::borrow::BorrowMut;
+use std::{thread, time};
 
 //////////////////////////////// MACROS ////////////////////////////////
 
@@ -83,6 +84,13 @@ impl SDLRenderer {
     }
 }
 
+pub enum Palette {
+    Grayscale,
+    Redscale,
+    Bluescale,
+    Greenscale,
+}
+
 /////////////////////////////// SPRITE ///////////////////////////////
 
 pub struct Sprite {
@@ -139,13 +147,15 @@ impl BackgroundPixel {
 
 pub struct QueueNode<T> {
     value: T,
+    index: usize,
     next: Option<Box<QueueNode<T>>>
 }
 
 impl<T> QueueNode<T> {
-    pub fn new(value: T) -> Self {
+    pub fn new(value: T, index: usize) -> Self {
         QueueNode {
             value,
+            index,
             next: None,
         }
     }
@@ -153,7 +163,7 @@ impl<T> QueueNode<T> {
 
 pub struct Queue<T> {
     end: Option<QueueNode<T>>,
-    len: u8,
+    len: usize,
 }
 
 impl<T> Queue<T> {
@@ -172,7 +182,7 @@ impl<T> Queue<T> {
     }
 
     pub fn add(&mut self, value: T) {
-        let new_node = QueueNode::new(value);
+        let new_node = QueueNode::new(value, self.len);
         if let Some(end) = &mut self.end {
             let mut start = end;
             loop {
@@ -184,6 +194,37 @@ impl<T> Queue<T> {
             start.next = Some(Box::new(new_node));
         } else { self.end = Some(new_node); }
         self.len += 1;
+    }
+
+    pub fn replace(&mut self, value: T, index: usize) {
+        let len = self.len;
+        let mut buffer = Vec::new();
+        for node in 0..len {
+            buffer.push(self.remove().unwrap());
+        }
+        for node in 0..index {
+            self.add(buffer.remove(0));
+        }
+        self.add(value);
+        for node in (index+1)..len {
+            self.add(buffer.remove(0));
+        }
+    }
+
+    pub fn index(&mut self, index: usize) -> Option<&T> {
+        let mut current = self.end.as_ref().unwrap();
+        for node in 0..self.len {
+            if current.index == index {
+                let value = &current.value;
+                return Some(value);
+            } else {
+                match current.next.as_ref() {
+                    Some(next_ref) => { current = next_ref; },
+                    None => { println!("Got None"); return None; }
+                }
+            }
+        }
+        return None;
     }
 
     pub fn remove(&mut self) -> Option<T> {
@@ -367,6 +408,32 @@ impl PixelFetcher { // pixel fetcher fetches 1 row of a tile at a time
     pub fn push_to_sprite_fifo(&mut self, sprite: &Sprite) {
         let x_flip = (sprite.attributes >> 5) & 1;
         // println!("SPRITE PIXELS PUSHED TO FIFO");
+        // BELOW IS CODE TO OVERWRITE TRANSPARENT PIXELS IN THE FIFO, TO HANDLE SPRITE OVERLAPPING
+        // DOESNT NEED TO WORK REALLY. LOL. BUT WOULD BE NICE IF IT DID.
+        /* for mut pixel_number in 0..self.sprite_fifo.len {
+            match self.sprite_fifo.index(pixel_number) {
+                Some(pixel) => {
+                    if pixel.colour_id == 0 {
+                        pixel_number = if x_flip == 1 { 7 - pixel_number } else { pixel_number };
+                        let colour_high = ((self.sprite_tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
+                        let colour_low = ((self.sprite_tile_data_low & (0b10000000 >> pixel_number)) >> (7 - pixel_number));
+                        let mut colour = colour_high | colour_low;
+                        let palette = match (sprite.attributes & 0b0001_0000) >> 4 {
+                            0 => 0xFF48,
+                            1 => 0xFF49,
+                            _ => unreachable!(),
+                        };
+            
+                        let priority = (sprite.attributes & 0b1000_0000) >> 7;
+                        let pixel = SpritePixel::new(colour, palette, priority);
+                        
+                        self.sprite_fifo.replace(pixel, pixel_number);
+                        println!("Replacing pixel");
+                    }
+                },
+                None => { break; }
+            }
+        } */
         for mut pixel_number in self.sprite_fifo.len..=7 {
             pixel_number = if x_flip == 1 { 7 - pixel_number } else { pixel_number };
             let colour_high = ((self.sprite_tile_data_high & (0b10000000 >> pixel_number)) >> (7 - pixel_number)) << 1;
@@ -413,10 +480,13 @@ pub struct PPU {
     pub renderer: SDLRenderer,
     pub displaybuffer_index: usize,
     pub pixel_fetcher: PixelFetcher,
+    pub selected_palette: Palette,
+
+    pub time_step: time::SystemTime,
 }
 
 impl PPU  {
-    pub fn new() -> Self {
+    pub fn new(selected_palette: Palette) -> Self {
         PPU {
             enabled: true,
             mode: 2,
@@ -441,6 +511,9 @@ impl PPU  {
             renderer: SDLRenderer::new(160, 144),
             displaybuffer_index: 0,
             pixel_fetcher: PixelFetcher::new(),
+            selected_palette,
+            
+            time_step: time::SystemTime::now(),
         }
     }
 
@@ -555,6 +628,10 @@ impl PPU  {
             self.displaybuffer_index = 0;
             self.entered_vblank = false;
             self.pixel_fetcher.window_line_counter = 0;
+
+            /*let time_elapsed = self.time_step.elapsed().unwrap().as_millis() as u64;
+            thread::sleep(time::Duration::from_millis(17 - time_elapsed));
+            self.time_step = time::SystemTime::now();*/
         }
         if self.cycles == 456 {
             self.inc_ly(memory);
@@ -743,56 +820,74 @@ impl PPU  {
 
     pub fn push_to_lcd(&mut self, memory: &mut Memory) {
         let lcdc = memory.read(0xFF40);
-        let rgb = if !self.pixel_fetcher.sprite_fifo.is_empty() && !self.pixel_fetcher.bgwin_fifo.is_empty() { // mix
+        let colour = if !self.pixel_fetcher.sprite_fifo.is_empty() && !self.pixel_fetcher.bgwin_fifo.is_empty() { // mix
             // println!("SPRITE FIFO HAS DATA @ ({}, {})", self.x, self.ly);
             let mut bg_pixel = self.pixel_fetcher.bgwin_fifo.remove().unwrap();
             let mut sprite_pixel = self.pixel_fetcher.sprite_fifo.remove().unwrap();
-            bg_pixel.colour_id = if lcdc & 0b0000_0001 == 0 { 0 } else { bg_pixel.colour_id };
-            sprite_pixel.colour_id = if lcdc & 0b0000_0010 == 0 { 0 } else { sprite_pixel.colour_id };
+            if lcdc & 0b0000_0001 == 0 { bg_pixel.colour_id = 0 };
+            if lcdc & 0b0000_0010 == 0 { sprite_pixel.colour_id = 0 };
             // println!("LCDC => {:#010b} @ ({}, {})", lcdc, self.x, self.ly);
             // println!("COLOUR => {} | PALETTE => {} | PRIORITY => {}", sprite_pixel.colour_id, sprite_pixel.palette, sprite_pixel.priority);
 
             if sprite_pixel.colour_id == 0 || (sprite_pixel.priority == 1 && bg_pixel.colour_id != 0) {
                 let palette = memory.read(bg_pixel.palette); // aka which 2 bits of the palette to use
                 let colour = (palette & (0b00000011 << (bg_pixel.colour_id * 2))) >> (bg_pixel.colour_id * 2);
-                match colour {
-                    0 => 255,
-                    1 => 169,
-                    2 => 84,
-                    3 => 0,
-                    _ => unreachable!(),
-                }
+                colour
             } else {
                 // println!("RENDERING SPRITE PIXEL @ ({},{})", self.x, self.ly);
                 let palette = memory.read(sprite_pixel.palette); // aka which 2 bits of the palette to use
                 let colour = (palette & (0b00000011 << (sprite_pixel.colour_id * 2))) >> (sprite_pixel.colour_id * 2);
-                match colour {
-                    0 => 255,
-                    1 => 169,
-                    2 => 84,
-                    3 => 0,
-                    _ => unreachable!(),
-                }
+                colour
             }
         } else { // only bother with bg
             let mut bg_pixel = self.pixel_fetcher.bgwin_fifo.remove().unwrap(); // pixel.colour tells us the id 
             bg_pixel.colour_id = if lcdc & 0b0000_0001 == 0 { 0 } else { bg_pixel.colour_id };
             let palette = memory.read(bg_pixel.palette); // aka which 2 bits of the palette to use
             let colour = (palette & (0b00000011 << (bg_pixel.colour_id * 2))) >> (bg_pixel.colour_id * 2);
-            match colour {
-                0 => 255,
-                1 => 169,
-                2 => 84,
-                3 => 0,
-                _ => unreachable!(),
-            }
+            colour
         };
 
-        self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
+        let rgb = match colour {
+            0 => { 
+                match &self.selected_palette {
+                    Palette::Grayscale => vec![255, 255, 255],
+                    Palette::Bluescale => vec![188, 15, 15],
+                    Palette::Greenscale => vec![155, 188, 15],
+                    Palette::Redscale => vec![15, 15, 188],
+                }
+            },
+            1 => { 
+                match &self.selected_palette {
+                    Palette::Grayscale => vec![169, 169, 169],
+                    Palette::Bluescale => vec![172, 15, 15],
+                    Palette::Greenscale => vec![139, 172, 15],
+                    Palette::Redscale => vec![15, 15, 172],
+                }
+            }
+            2 => { 
+                match &self.selected_palette {
+                    Palette::Grayscale => vec![84, 84, 84],
+                    Palette::Bluescale => vec![98, 48, 48],
+                    Palette::Greenscale => vec![48, 98, 48],
+                    Palette::Redscale => vec![48, 48, 98],
+                }
+            }
+            3 => { 
+                match &self.selected_palette {
+                    Palette::Grayscale => vec![0, 0, 0],
+                    Palette::Bluescale => vec![56, 15, 15],
+                    Palette::Greenscale => vec![15, 56, 15],
+                    Palette::Redscale => vec![15, 15, 56],
+                }
+            }
+            _ => unreachable!()
+        };
+
+        self.renderer.displaybuffer[self.displaybuffer_index] = rgb[0];
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(1);
-        self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
+        self.renderer.displaybuffer[self.displaybuffer_index] = rgb[1];
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(1);
-        self.renderer.displaybuffer[self.displaybuffer_index] = rgb;
+        self.renderer.displaybuffer[self.displaybuffer_index] = rgb[2];
         self.displaybuffer_index = self.displaybuffer_index.wrapping_add(2);
 
         self.rendering_window(memory);

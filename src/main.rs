@@ -41,6 +41,7 @@ use postgres::types::Type;
 use cpu::CPU;
 use registers::Reg;
 use ppu::PPU;
+use ppu::Palette;
 use memory::Memory;
 
 const GB_WIDTH:u32 = 160;
@@ -530,7 +531,7 @@ fn signup(client: &mut Client) -> User {
 
 fn main() -> Result<(), io::Error> {
     //////////////////////////////////// DATABASE ////////////////////////////////////
-    let mut client = Client::connect("postgresql://postgres:PASSWORD@localhost/nemulator", NoTls).unwrap();
+    let mut client = Client::connect("postgresql://postgres:AceBen13@localhost/nemulator", NoTls).unwrap();
 
     let mut user = select_menu(&mut client);
 
@@ -576,7 +577,7 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let tabs_options:Vec<_> = ["Library", "Settings"]
+    let tabs_options:Vec<_> = ["Library", "Palettes"]
     .iter().cloned().map(Spans::from).collect();
 
     let mut tab_index:usize = 0;
@@ -592,7 +593,12 @@ fn main() -> Result<(), io::Error> {
     let mut stateful_rom_list = RomList::new(roms);
     stateful_rom_list.state.select(Some(0));
 
+    let mut palettes: Vec<String> = vec!["Grayscale".to_string(), "Redscale".to_string(), "Bluescale".to_string(), "Greenscale".to_string()];
+    let mut stateful_palette_list = RomList::new(palettes);
+    stateful_palette_list.state.select(Some(0));
+
     let mut filename = &String::from("TEMP");
+    let mut selected_palette = Palette::Grayscale; // Grayscale by default
 
     let mut score_map: HashMap<String, String> = HashMap::new();
 
@@ -721,6 +727,13 @@ fn main() -> Result<(), io::Error> {
             .highlight_style(Style::default().fg(darkest_green))
             .highlight_symbol(">>");
 
+            let items: Vec<ListItem> = stateful_palette_list.items.iter().map(|i| ListItem::new(i.as_ref())).collect();
+            let palette_list = List::new(items)
+            .block(Block::default().title("Palettes").borders(Borders::ALL))
+            .style(Style::default().fg(dark_green))
+            .highlight_style(Style::default().fg(darkest_green))
+            .highlight_symbol(">>");
+
             // RENDERING
             match true_tab_index {
                 0 => {
@@ -730,9 +743,10 @@ fn main() -> Result<(), io::Error> {
                     f.render_widget(rom_metadata_list, library_layout_horizontal[1]);
                 }
                 1 => {
-                    
                     f.render_widget(tabs, chunks[0]);
                     f.render_widget(content, chunks[1]);
+                    f.render_stateful_widget(palette_list, library_layout_horizontal[0], &mut stateful_palette_list.state);
+                    f.render_widget(rom_metadata_list, library_layout_horizontal[1]);
                 }
                 _ => {}
             };
@@ -758,9 +772,21 @@ fn main() -> Result<(), io::Error> {
                     if tab_index < (tabs_options.len() -1) {tab_index += 1}
                     else {tab_index = 0},
                 CrosstermEvent::Key(KeyEvent {code:KeyCode::Up, ..}, ..) =>
-                    { stateful_rom_list.previous(); }
+                    { 
+                        match tab_index {
+                            0 => { stateful_rom_list.previous(); },
+                            1 => { stateful_palette_list.previous(); },
+                            _ => {},
+                        }
+                    }
                 CrosstermEvent::Key(KeyEvent {code:KeyCode::Down, ..}, ..) =>
-                    { stateful_rom_list.next(); }
+                { 
+                    match tab_index {
+                        0 => { stateful_rom_list.next(); },
+                        1 => { stateful_palette_list.next(); },
+                        _ => {},
+                    }
+                }
                 CrosstermEvent::Key(KeyEvent {code:KeyCode::Enter, ..}, ..) => {
                     disable_raw_mode()?;
                     execute!(
@@ -785,6 +811,13 @@ fn main() -> Result<(), io::Error> {
                             println!("ERROR FETCHING GAME DATA");
                         }
                     };
+                    selected_palette = match stateful_palette_list.state.selected().unwrap() {
+                        0 => Palette::Grayscale,
+                        1 => Palette::Redscale,
+                        2 => Palette::Bluescale,
+                        3 => Palette::Greenscale,
+                        _ => unreachable!(),
+                    };
                     break 'running;
                 }
                 _ => {},
@@ -794,7 +827,7 @@ fn main() -> Result<(), io::Error> {
 
     ///////////////////////////////// "MAIN" /////////////////////////////////
 
-    let mut cpu = CPU::new();
+    let mut cpu = CPU::new(selected_palette);
     println!("CREATED CPU");
     println!("FILE => {}", filename);
     cpu.memory.load_rom(filename);

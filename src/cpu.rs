@@ -294,7 +294,7 @@ pub struct CPU {
 }
 
 impl CPU {
-    pub fn new() -> Self {
+    pub fn new(selected_palette: Palette) -> Self {
         CPU {
             halted: false,
             halt_bug_with_enter: false,
@@ -309,12 +309,54 @@ impl CPU {
             t_cycles: 0,
             timer: Timer::new(),
 
-            ppu: PPU::new(),
+            ppu: PPU::new(selected_palette),
 
             interrupt_queue: BinaryHeap::new(),
             interrupt_queue_bitflags: 0,
             input_states: InputStates::new(),
         }
+    }
+
+    pub fn mock_boot_rom(&mut self) {
+        self.memory.write(0xFF00, 0xCF);
+        self.memory.write(0xFF02, 0x7E);
+        self.memory.write(0xFF04, 0xAB);
+        self.memory.write(0xFF07, 0xF8);
+        self.memory.write(0xFF0F, 0xE1);
+        self.memory.write(0xFF10, 0x80);
+        self.memory.write(0xFF11, 0xBF);
+        self.memory.write(0xFF12, 0xF3);
+        self.memory.write(0xFF13, 0xFF);
+        self.memory.write(0xFF14, 0xBF);
+        self.memory.write(0xFF16, 0x3F);
+        self.memory.write(0xFF18, 0xFF);
+        self.memory.write(0xFF19, 0xBF);
+        self.memory.write(0xFF1A, 0x7F);
+        self.memory.write(0xFF1B, 0xFF);
+        self.memory.write(0xFF1C, 0x9F);
+        self.memory.write(0xFF1D, 0xFF);
+        self.memory.write(0xFF1E, 0xBF);
+        self.memory.write(0xFF20, 0xFF);
+        self.memory.write(0xFF23, 0xBF);
+        self.memory.write(0xFF24, 0x77);
+        self.memory.write(0xFF25, 0xF3);
+        self.memory.write(0xFF26, 0xF1);
+        self.memory.write(0xFF40, 0x91);
+        self.memory.write(0xFF41, 0x85);
+        self.memory.write(0xFF46, 0xFF);
+        self.memory.write(0xFF47, 0xFC);
+        self.memory.write(0xFF4D, 0xFF);
+        self.memory.write(0xFF51, 0xFF);
+        self.memory.write(0xFF52, 0xFF);
+        self.memory.write(0xFF53, 0xFF);
+        self.memory.write(0xFF54, 0xFF);
+        self.memory.write(0xFF55, 0xFF);
+        self.memory.write(0xFF56, 0xFF);
+        self.memory.write(0xFF68, 0xFF);
+        self.memory.write(0xFF69, 0xFF);
+        self.memory.write(0xFF6A, 0xFF);
+        self.memory.write(0xFF6B, 0xFF);
+        self.memory.write(0xFF70, 0xFF);
     }
 
     pub fn get_game_score(&mut self, guid: i32) -> i32 {

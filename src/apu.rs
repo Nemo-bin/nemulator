@@ -22,6 +22,7 @@ const DUTY: [[i8; 8]; 4] = [ // -1 = low, 1 = high, a volume unit of 0 is used w
 // 8. Read into why boytacean ticks via cycle count... confused at this, lol. I assume he does it for 4 cycles.
 // 9. Sort out sequences for square channels (maybe channel 3 also?)
 // 10. Tick channels
+// 11. Finish channels 3 \ 4...
 ///////////////////////////////////////////////////////////////////
 pub enum Channel {
     Chnl1,
@@ -75,6 +76,70 @@ impl APU {
             sequencer: FrameSequencer::new(),
             audio_buffer: Queue::new(),
             audio_buffer_max: 0,
+        }
+    }
+
+    fn read(&mut self, addr: u16) -> u8 {
+        match addr {
+            0xFF10 => {
+                ((self.channel_1.sweep.period & 0x07) << 4)
+                | { if self.channel_1.sweep.direction_up { 0x00 } else { 0x80 } }
+                | self.channel_1.sweep.shift & 0x7
+                | 0x80
+            },
+            0xFF11 => {
+                ((self.channel_1.duty & 0x03) << 6)
+                | 0x3f
+            },
+            0xFF12 => {
+                (self.channel_1.volume_envelope.initial_volume << 4)
+                | { if self.channel_1.volume_envelope.direction_up { 0x80 } else { 0x00 } }
+                | self.channel_1.volume_envelope.period & 0x7
+            },
+            0xFF13 => 0xFF,
+            0xFF14 => {
+                0xBF 
+                | { if self.channel_1.length_ctr.enabled { 0x40 } else { 0x00 } }
+            },
+            0xFF15 => 0xFF,
+            0xFF16 => {
+                ((self.channel_2.duty & 0x03) << 6)
+                | 0x3f    
+            },
+            0xFF17 => {
+                (self.channel_2.volume_envelope.initial_volume << 4)
+                | { if self.channel_2.volume_envelope.direction_up { 0x80 } else { 0x00 } }
+                | self.channel_2.volume_envelope.period & 0x7
+            },
+            0xFF18 => 0xFF,
+            0xFF19 => { 
+                0xBF 
+                | { if self.channel_2.length_ctr.enabled { 0x40 } else { 0x00 } }
+            },
+            0xFF1A => {
+                0x7F
+                | { if self.channel_3.dac_enabled { 0x80 } else { 0x00 } }
+            },
+            0xFF1B => {
+                0xFF
+            },
+            0xFF1C => {
+                (self.channel_3.volume & 0x03) << 5
+                | 0x9F
+            },
+            0xFF1D => 0xFF,
+            0xFF1E => { 
+                0xBF 
+                | { if self.channel_3.length_ctr.enabled { 0x40 } else { 0x00 } }
+            },
+            0xFF1F => 0xFF,
+            0xFF20 => 0xFF,
+            0xFF21 => {
+                (self.channel_4.volume_envelope.initial_volume << 4)
+                | { if self.channel_4.volume_envelope.direction_up { 0x80 } else { 0x00 } }
+                | self.channel_4.volume_envelope.period & 0x7
+            },
+            _ => unreachable!()
         }
     }
 
@@ -133,7 +198,7 @@ impl APU {
     pub fn tick_all_envelopes(&mut self) {
         self.channel_1.volume_envelope.tick();
         self.channel_2.volume_envelope.tick();
-        self.channel_3.volume_envelope.tick();
+        self.channel_4.volume_envelope.tick();
     }
 }
 
@@ -293,7 +358,7 @@ pub struct Channel3 {
     enabled: bool,
     dac_enabled: bool,
     length_ctr: LengthCtr,
-    volume_envelope: VolumeEnvelope,
+    volume: u8,
     // The RAM to be used for generating waves for Channel 3
     wave_ram: [u8; 16],
     output: u8,
@@ -306,7 +371,7 @@ impl Channel3 {
             enabled: false,
             dac_enabled: false,
             length_ctr: LengthCtr::new(256),
-            volume_envelope: VolumeEnvelope::new(),
+            volume: 0,
 
             wave_ram: [0_u8; 16],
             output: 0,
@@ -329,6 +394,10 @@ pub struct Channel4 {
     length_ctr: LengthCtr,
     volume_envelope: VolumeEnvelope,
 
+    divisor_code: u8,
+    shift: u8,
+    counter_width: u8,
+
     output: u8,
 }
 
@@ -341,8 +410,31 @@ impl Channel4 {
             length_ctr: LengthCtr::new(64),
             volume_envelope: VolumeEnvelope::new(),
 
+            divisor_code: 0,
+            shift: 0,
+            counter_width: 0,
+
             output: 0,
         }
+    }
+
+    fn tick(&mut self) {
+        self.timer.saturating_sub(1);
+        if self.timer > 0 {
+            return;
+        }
+        
+        self.timer = match self.divisor_code {
+            0 => { 8 << self.shift },
+            1 => { 16 << self.shift },
+            2 => { 32 << self.shift },
+            3 => { 48 << self.shift },
+            4 => { 64 << self.shift },
+            5 => { 80 << self.shift },
+            6 => { 96 << self.shift },
+            7 => { 112 << self.shift },
+            _ => unreachable!(),
+        };
     }
 }
 

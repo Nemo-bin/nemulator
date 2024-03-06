@@ -108,7 +108,7 @@ impl Memory{
             0xFF46 => { self.dma_transfer(data); },
             0xFF00..=0xFF7F => { self.io_registers[address as usize - 0xFF00] = data; /*if address == 0xFF41 && (data & 0b0000_0100) == 0 { println!("STAT => {:#010b}", data); }*/ },
             0xFF80..=0xFFFE => { self.hram[address as usize - 0xFF80] = data },
-            0xFFFF => { println!("IE WRITTEN TO => {:#010b}", data); self.ie_register[0] = data },
+            0xFFFF => { /*println!( "IE WRITTEN TO => {:#010b}", data);*/ self.ie_register[0] = data },
             _ => { println!("INVALID ADDRESS WRITE @ {:x}", address); }
         };
     }
